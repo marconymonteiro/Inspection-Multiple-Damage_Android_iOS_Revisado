@@ -46,6 +46,10 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   String _damageDescription = ''; // Descrição do dano
   List<File> _damagePhotos = []; // Lista de fotos relacionadas a danos
   final List<File> _photosCarga = []; // Lista final de fotos de carga
+  final List<File> _photosAcomodacao = [];
+  final List<File> _photosCalcamento = [];
+  final List<File> _photosAmarracao = [];
+  File? _photoPlaqueta; // Para a foto da plaqueta
 
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
@@ -195,86 +199,86 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
   }
 
   Future<void> _saveForm() async {
-  if (!_formKey.currentState!.validate()) return;
-
-  final prefs = await SharedPreferences.getInstance();
-
-  try {
-    // Salvar dados do formulário
-    for (var entry in _controllers.entries) {
-      await prefs.setString('${widget.formId}-${entry.key}', entry.value.text);
-    }
-    await prefs.setString('${widget.formId}-hasDamage', _hasDamage);
-    await prefs.setStringList('${widget.formId}-photosCarga', _photosCarga.map((e) => e.path).toList());
-    await prefs.setString('${widget.formId}-selectedDate', _selectedDate?.toIso8601String() ?? '');
-
-    // Salvar danos como JSON
-    final List<Map<String, dynamic>> damagesData = _damages.map((damage) {
-      return {
-        'description': damage['description'],
-        'photos': (damage['photos'] as List<File>)
-            .map((photo) => photo.path)
-            .toList(),
-      };
-    }).toList();
-    await prefs.setString('${widget.formId}-damages', jsonEncode(damagesData));
-
-    // Adicionar o ID do formulário aos salvos
-    final savedForms = prefs.getStringList('savedForms') ?? [];
-    savedForms.add(widget.formId);
-    await prefs.setStringList('savedForms', savedForms);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Formulário editado com sucesso!')),
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Erro ao salvar o formulário.')),
-    );
-  }
-}
-
-Future<void> _loadForm() async {
-  final prefs = await SharedPreferences.getInstance();
-  
-  setState(() {
-    for (var entry in _controllers.entries) {
-      entry.value.text = prefs.getString('${widget.formId}-${entry.key}') ?? '';
-    }
-    _hasDamage = prefs.getString('${widget.formId}-hasDamage') ?? 'Selecione';
-    _photosCarga.addAll(
-      (prefs.getStringList('${widget.formId}-photosCarga') ?? [])
-          .map((path) => File(path)),
-    );
-    _selectedDate = prefs.getString('${widget.formId}-selectedDate') != null
-        ? DateTime.parse(prefs.getString('${widget.formId}-selectedDate')!)
-        : null;
-
-    final damagesJson = prefs.getString('${widget.formId}-damages');
-    if (damagesJson != null) {
-      try {
-        final decodedDamages = jsonDecode(damagesJson) as List<dynamic>;
-        _damages = decodedDamages.map((damage) {
-          return {
-            'description': damage['description'] as String,
-            'photos': (damage['photos'] as List<dynamic>)
-                .map((path) => File(path as String))
-                .toList(),
-          };
-        }).toList();
-      } catch (e) {
-        _damages = [];
+    if (!_formKey.currentState!.validate()) return;
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      // Salvar dados do formulário
+      for (var entry in _controllers.entries) {
+        await prefs.setString('${widget.formId}-${entry.key}', entry.value.text);
       }
+      await prefs.setString('${widget.formId}-hasDamage', _hasDamage);
+      await prefs.setStringList('${widget.formId}-photosAcomodacao', _photosAcomodacao.map((e) => e.path).toList());
+      await prefs.setStringList('${widget.formId}-photosCalcamento', _photosCalcamento.map((e) => e.path).toList());
+      await prefs.setStringList('${widget.formId}-photosAmarração', _photosAmarracao.map((e) => e.path).toList());
+      await prefs.setString('${widget.formId}-photoPlaqueta', _photoPlaqueta?.path ?? '');
+      await prefs.setString('${widget.formId}-selectedDate', _selectedDate?.toIso8601String() ?? '');
+      // Salvar danos como JSON
+      final List<Map<String, dynamic>> damagesData = _damages.map((damage) {
+        return {
+          'description': damage['description'],
+          'photos': (damage['photos'] as List).map((photo) => photo.path).toList(),
+        };
+      }).toList();
+      await prefs.setString('${widget.formId}-damages', jsonEncode(damagesData));
+      // Adicionar o ID do formulário aos salvos
+      final savedForms = prefs.getStringList('savedForms') ?? [];
+      savedForms.add(widget.formId);
+      await prefs.setStringList('savedForms', savedForms);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Formulário editado com sucesso!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro ao salvar o formulário.')),
+      );
     }
-  });
-}
-
-Future<Uint8List> _compressImage(File image) async {
-    final bytes = await image.readAsBytes();
-    final decodedImage = img.decodeImage(bytes);
-    final compressedImage = img.encodeJpg(decodedImage!, quality: 50);
-    return Uint8List.fromList(compressedImage);
   }
+
+  Future<void> _loadForm() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      for (var entry in _controllers.entries) {
+        entry.value.text = prefs.getString('${widget.formId}-${entry.key}') ?? '';
+      }
+      _hasDamage = prefs.getString('${widget.formId}-hasDamage') ?? 'Selecione';
+      _photosAcomodacao.addAll(
+        (prefs.getStringList('${widget.formId}-photosAcomodacao') ?? []).map((path) => File(path)),
+      );
+      _photosCalcamento.addAll(
+        (prefs.getStringList('${widget.formId}-photosCalcamento') ?? []).map((path) => File(path)),
+      );
+      _photosAmarracao.addAll(
+        (prefs.getStringList('${widget.formId}-photosAmarração') ?? []).map((path) => File(path)),
+      );
+      _photoPlaqueta = prefs.getString('${widget.formId}-photoPlaqueta') != null
+          ? File(prefs.getString('${widget.formId}-photoPlaqueta')!)
+          : null;
+      _selectedDate = prefs.getString('${widget.formId}-selectedDate') != null
+          ? DateTime.parse(prefs.getString('${widget.formId}-selectedDate')!)
+          : null;
+      final damagesJson = prefs.getString('${widget.formId}-damages');
+      if (damagesJson != null) {
+        try {
+          final decodedDamages = jsonDecode(damagesJson) as List;
+          _damages = decodedDamages.map((damage) {
+            return {
+              'description': damage['description'] as String,
+              'photos': (damage['photos'] as List).map((path) => File(path as String)).toList(),
+            };
+          }).toList();
+        } catch (e) {
+          _damages = [];
+        }
+      }
+    });
+  }
+
+  Future<Uint8List> _compressImage(File image) async {
+      final bytes = await image.readAsBytes();
+      final decodedImage = img.decodeImage(bytes);
+      final compressedImage = img.encodeJpg(decodedImage!, quality: 50);
+      return Uint8List.fromList(compressedImage);
+    }
 
   Future<void> _pickImage(List<File> photoList) async {
     final ImagePicker picker = ImagePicker();
@@ -282,23 +286,32 @@ Future<Uint8List> _compressImage(File image) async {
     if (photo != null) {
       final tempFile = File(photo.path);
       final compressedBytes = await _compressImage(tempFile);
-
-      // Salvar a imagem compactada em um arquivo temporário
-      final compressedFile = await File(tempFile.path)
-          .writeAsBytes(compressedBytes);
-
+      final compressedFile = await File(tempFile.path).writeAsBytes(compressedBytes);
       setState(() {
         photoList.add(compressedFile);
       });
     }
   }
 
-  Widget _buildPhotoPreview(List<File> photos, List<File> photoList) {
+  // Método para capturar a foto da plaqueta (única imagem)
+Future<void> _pickPlaquetaPhoto() async {
+  final ImagePicker picker = ImagePicker();
+  final XFile? photo = await picker.pickImage(source: ImageSource.camera);
+  if (photo != null) {
+    final tempFile = File(photo.path);
+    final compressedBytes = await _compressImage(tempFile);
+    final compressedFile = await File(tempFile.path).writeAsBytes(compressedBytes);
+    setState(() {
+      _photoPlaqueta = compressedFile;
+    });
+  }
+}
+
+  Widget _buildPhotoPreview(List<File> photos, {required VoidCallback onDelete}) {
     return photos.isNotEmpty
         ? Wrap(
             spacing: 8,
-            runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-
+            runSpacing: 8,
             children: photos.map((photo) {
               return Stack(
                 alignment: Alignment.topRight,
@@ -309,9 +322,8 @@ Future<Uint8List> _compressImage(File image) async {
                   ),
                   IconButton(
                     icon: const Icon(Icons.remove_circle, color: Colors.red),
-                    onPressed: () => _confirmDeletePhoto(photo, photoList),
+                    onPressed: () => _confirmDeletePhoto(photo, photos),
                   ),
-                SizedBox(height: 8), // Espaçamento vertical após cada imagem
                 ],
               );
             }).toList(),
@@ -319,13 +331,14 @@ Future<Uint8List> _compressImage(File image) async {
         : const SizedBox();
   }
 
+  // Método para confirmar a exclusão de uma foto (reutilizado para todos os campos)
   Future<void> _confirmDeletePhoto(File photo, List<File> photoList) async {
-    final shouldDelete = await showDialog<bool>(
+    final shouldDelete = await showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           title: const Text('Excluir Imagem'),
-          content: const Text('Tem certeza que deseja excluir a imagem?'),
+          content: const Text('Tem certeza que deseja excluir esta imagem?'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -339,7 +352,6 @@ Future<Uint8List> _compressImage(File image) async {
         );
       },
     );
-
     if (shouldDelete == true) {
       setState(() {
         photoList.remove(photo);
@@ -347,6 +359,7 @@ Future<Uint8List> _compressImage(File image) async {
     }
   }
 
+  // Método para exibir a imagem em tamanho completo (reutilizado para todos os campos)
   void _showFullImage(File photo) {
     showDialog(
       context: context,
@@ -458,10 +471,47 @@ Widget build(BuildContext context) {
 
               const SizedBox(height: 16),
               ElevatedButton(
-                onPressed: () => _pickImage(_photosCarga),
-                child: const Text('Adicionar Fotos Carga'),
+                onPressed: () => _pickImage(_photosAcomodacao),
+                child: const Text('Adicionar Fotos de Acomodação'),
               ),
-              _buildPhotoPreview(_photosCarga, _photosCarga),
+              _buildPhotoPreview(_photosAcomodacao, onDelete: () {}),
+              const SizedBox(height: 16),
+
+              // Fotos do Calçamento
+              ElevatedButton(
+                onPressed: () => _pickImage(_photosCalcamento),
+                child: const Text('Adicionar Fotos de Calçamento'),
+              ),
+              _buildPhotoPreview(_photosCalcamento, onDelete: () {}),
+              const SizedBox(height: 16),
+
+              // Fotos da Amarração
+              ElevatedButton(
+                onPressed: () => _pickImage(_photosAmarracao),
+                child: const Text('Adicionar Fotos de Amarração'),
+              ),
+              _buildPhotoPreview(_photosAmarracao, onDelete: () {}),
+              const SizedBox(height: 16),
+
+              // Foto da Plaqueta
+              ElevatedButton(
+                onPressed: _pickPlaquetaPhoto,
+                child: const Text('Adicionar Foto da Plaqueta'),
+              ),
+              if (_photoPlaqueta != null)
+                Stack(
+                  alignment: Alignment.topRight,
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showFullImage(_photoPlaqueta!),
+                      child: Image.file(_photoPlaqueta!, height: 100, width: 100, fit: BoxFit.cover),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle, color: Colors.red),
+                      onPressed: () => _confirmDeletePhoto(_photoPlaqueta!, [_photoPlaqueta!]),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 value: _hasDamage,
