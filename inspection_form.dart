@@ -11,6 +11,7 @@ import 'package:share_extend/share_extend.dart';
 import 'pdf_generator.dart';
 import 'dart:convert';
 import 'package:image/image.dart' as img;
+import 'package:signature/signature.dart'; // Pacote para captura de assinatura
 
 class FormularioInspecao extends StatefulWidget {
   final String formId; // ID do formulário a ser editado
@@ -40,16 +41,22 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   // String _currentDate = DateFormat('dd/MM/yyyy').format(DateTime.now());
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
-  String _hasDamage = 'Selecione'; // Variável para controlar o estado de seleção de dano
+  String _hasDamage = 'Selecione'; // Variável para controlar o estado de seleção da avaria
   List<Map<String, Object>> _damages = []; // Lista que conterá mapas com tipos garantidos
   Map<String, Object>? convertedMap; // Inicialize como nulo, será usado após a conversão
-  String _damageDescription = ''; // Descrição do dano
-  List<File> _damagePhotos = []; // Lista de fotos relacionadas a danos
+  String _damageDescription = ''; // Descrição da avaria
+  List<File> _damagePhotos = []; // Lista de fotos relacionadas a avarias
   final List<File> _photosCarga = []; // Lista final de fotos de carga
   final List<File> _photosAcomodacao = [];
   final List<File> _photosCalcamento = [];
   final List<File> _photosAmarracao = [];
   File? _photoPlaqueta; // Para a foto da plaqueta
+  File? _signatureImage; // Para armazenar a assinatura como imagem
+  final SignatureController _signatureController = SignatureController(
+    penStrokeWidth: 2,
+    penColor: Colors.black,
+    exportBackgroundColor: Colors.white,
+  );
 
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
@@ -84,12 +91,12 @@ void _saveDamage() {
         _damagePhotos.clear(); // Limpa a lista de fotos
       });
 
-      print('Dano salvo com sucesso: $convertedMap');
+      print('Avaria salva com sucesso: $convertedMap');
     } catch (e) {
-      print('Erro ao salvar dano: $e');
+      print('Erro ao salvar avaria: $e');
     }
   } else {
-    print('Nenhum dano foi fornecido para salvar.');
+    print('Nenhuma avaria foi fornecida para salvar.');
   }
 }
 
@@ -202,6 +209,7 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
     if (!_formKey.currentState!.validate()) return;
     final prefs = await SharedPreferences.getInstance();
     try {
+     
       // Salvar dados do formulário
       for (var entry in _controllers.entries) {
         await prefs.setString('${widget.formId}-${entry.key}', entry.value.text);
@@ -212,7 +220,8 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
       await prefs.setStringList('${widget.formId}-photosAmarração', _photosAmarracao.map((e) => e.path).toList());
       await prefs.setString('${widget.formId}-photoPlaqueta', _photoPlaqueta?.path ?? '');
       await prefs.setString('${widget.formId}-selectedDate', _selectedDate?.toIso8601String() ?? '');
-      // Salvar danos como JSON
+      await prefs.setString('${widget.formId}-signature', _signatureImage?.path ?? '');
+      // Salvar avarias como JSON
       final List<Map<String, dynamic>> damagesData = _damages.map((damage) {
         return {
           'description': damage['description'],
@@ -256,6 +265,10 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
       _selectedDate = prefs.getString('${widget.formId}-selectedDate') != null
           ? DateTime.parse(prefs.getString('${widget.formId}-selectedDate')!)
           : null;
+      final signaturePath = prefs.getString('${widget.formId}-signature');
+      if (signaturePath != null) {
+        _signatureImage = File(signaturePath);
+      }
       final damagesJson = prefs.getString('${widget.formId}-damages');
       if (damagesJson != null) {
         try {
@@ -306,6 +319,87 @@ Future<void> _pickPlaquetaPhoto() async {
     });
   }
 }
+
+  // Campo Assinatura
+
+  Future<void> _clearSignature() async {
+    setState(() {
+      _signatureController.clear(); // Limpa o estado interno do controlador
+      _signatureImage?.delete();   // Remove o arquivo de imagem anterior, se existir
+      _signatureImage = null;      // Remove a referência à imagem salva
+    });
+  }
+
+  Future<void> _saveSignature() async {
+    if (_signatureController.isNotEmpty) {
+      final Uint8List? data = await _signatureController.toPngBytes();
+      if (data != null) {
+        final tempDir = Directory.systemTemp;
+
+        // Adiciona um identificador único ao nome do arquivo (timestamp)
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final filePath = '${tempDir.path}/signature_$timestamp.png';
+
+        // Cria ou substitui o arquivo
+        final file = File(filePath);
+        await file.writeAsBytes(data, mode: FileMode.write); // Sobrescreve o arquivo
+
+        // Remove a assinatura anterior, se existir
+        if (_signatureImage != null) {
+          await _signatureImage!.delete();
+        }
+
+        setState(() {
+          _signatureImage = file; // Salva a nova assinatura
+        });
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Assinatura vazia. Por favor, desenhe uma assinatura.')),
+      );
+    }
+  }
+
+  Widget _buildSignatureSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Assinatura do Responsável pela Liberação',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          height: 150,
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.black),
+          ),
+          child: Signature(
+            controller: _signatureController,
+            backgroundColor: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            ElevatedButton.icon(
+              onPressed: _clearSignature,
+              icon: const Icon(Icons.clear),
+              label: const Text('Limpar'),
+            ),
+            ElevatedButton.icon(
+              onPressed: _saveSignature,
+              icon: const Icon(Icons.save),
+              label: const Text('Salvar Assinatura'),
+            ),
+          ],
+        ),
+        if (_signatureImage != null)
+          Image.file(_signatureImage!, height: 100, width: 200, fit: BoxFit.cover),
+      ],
+    );
+  }
 
   Widget _buildPhotoPreview(List<File> photos, {required VoidCallback onDelete}) {
     return photos.isNotEmpty
@@ -401,6 +495,10 @@ Future<void> _pickPlaquetaPhoto() async {
       hasDamage: _hasDamage == 'Sim',
       damageDescription: _controllers['damageDescription']!.text,
       photosCarga: _photosCarga,
+
+      photosAcomodacao: _photosAcomodacao,
+      photosAmarracao: _photosAmarracao,
+      photosCalcamento: _photosCalcamento,
       photosDamage: _photosDamage,
       damagesData: _damages, //incluído para teste de emissão de PDF
     );
@@ -454,6 +552,7 @@ Widget build(BuildContext context) {
                 return null;
               },
             ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _controllers['invoiceItems'],
               keyboardType: TextInputType.number, // Define o teclado numérico
@@ -468,6 +567,34 @@ Widget build(BuildContext context) {
                 return null;
               },
             ),
+
+             // Foto da Plaqueta
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _pickPlaquetaPhoto,
+                child: const Text('Adicionar Foto da Plaqueta'),
+              ),
+              const SizedBox(height: 8), // Espaçamento entre o botão e a foto
+              if (_photoPlaqueta != null)
+                Stack(
+                  alignment: Alignment.topRight,
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showFullImage(_photoPlaqueta!),
+                      child: Image.file(_photoPlaqueta!, height: 100, width: 100, fit: BoxFit.cover),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle, color: Colors.red),
+                      onPressed: () => _confirmDeletePhoto(_photoPlaqueta!, [_photoPlaqueta!]),
+                    ),
+                  ],
+                ),
+
+              const SizedBox(height: 16),
+                const Text(
+                  'Registros da Carga',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
 
               const SizedBox(height: 16),
               ElevatedButton(
@@ -493,29 +620,16 @@ Widget build(BuildContext context) {
               _buildPhotoPreview(_photosAmarracao, onDelete: () {}),
               const SizedBox(height: 16),
 
-              // Foto da Plaqueta
-              ElevatedButton(
-                onPressed: _pickPlaquetaPhoto,
-                child: const Text('Adicionar Foto da Plaqueta'),
-              ),
-              if (_photoPlaqueta != null)
-                Stack(
-                  alignment: Alignment.topRight,
-                  children: [
-                    GestureDetector(
-                      onTap: () => _showFullImage(_photoPlaqueta!),
-                      child: Image.file(_photoPlaqueta!, height: 100, width: 100, fit: BoxFit.cover),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.remove_circle, color: Colors.red),
-                      onPressed: () => _confirmDeletePhoto(_photoPlaqueta!, [_photoPlaqueta!]),
-                    ),
-                  ],
+              const SizedBox(height: 16),
+                const Text(
+                  'Registros da Avarias',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
+
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 value: _hasDamage,
-                decoration: const InputDecoration(labelText: 'Há Danos?'),
+                decoration: const InputDecoration(labelText: 'Há Avarias?'),
                 items: ['Selecione', 'Sim', 'Não'].map((value) {
                   return DropdownMenuItem<String>(
                     value: value,
@@ -532,7 +646,7 @@ Widget build(BuildContext context) {
               if (_hasDamage == 'Sim') ...[
                 TextFormField(
                   decoration: const InputDecoration(
-                    labelText: 'Descrição do Dano',
+                    labelText: 'Descrição da avaria',
                     alignLabelWithHint: true, // Alinha o rótulo com o topo do campo
                     border: OutlineInputBorder(), // Adiciona uma borda ao redor do campo
                   ),
@@ -546,7 +660,7 @@ Widget build(BuildContext context) {
                   initialValue: _damageDescription,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Por favor, insira a descrição do dano';
+                      return 'Por favor, insira a descrição da avaria';
                     }
                     return null;
                   },
@@ -554,7 +668,7 @@ Widget build(BuildContext context) {
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.camera_alt),
-                  label: const Text('Adicionar Foto Dano'),
+                  label: const Text('Adicionar Foto da Avaria'),
                   onPressed: () => _pickImage(_damagePhotos)
                 ),
                 const SizedBox(height: 10),
@@ -589,7 +703,7 @@ Widget build(BuildContext context) {
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.add),
-                  label: const Text('Salvar Dano'),
+                  label: const Text('Salvar Avaria'),
                   onPressed: _saveDamage,
                 ),
                 const SizedBox(height: 16),
@@ -637,8 +751,8 @@ Widget build(BuildContext context) {
                                     context: context,
                                     builder: (context) {
                                       return AlertDialog(
-                                        title: const Text('Excluir Dano'),
-                                        content: const Text('Tem certeza que deseja excluir este dano?'),
+                                        title: const Text('Excluir Avaria'),
+                                        content: const Text('Tem certeza que deseja excluir esta avaria?'),
                                         actions: [
                                           TextButton(
                                             onPressed: () => Navigator.of(context).pop(false),
@@ -666,6 +780,27 @@ Widget build(BuildContext context) {
                     },
                   ),
               ],
+              // Campo Assinatura
+              const SizedBox(height: 16),
+                const Text(
+                  'Dados de Aprovação',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _controllers['nameResp'],
+                  decoration: const InputDecoration(labelText: 'Responsável pela Aprovação'),
+                  validator: (value) => value == null || value.isEmpty ? 'Campo obrigatório' : null,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _controllers['cpfResp'],
+                  decoration: const InputDecoration(labelText: 'CPF da Aprovação'),
+                  validator: (value) => value == null || value.isEmpty ? 'Campo obrigatório' : null,
+                ),
+                const SizedBox(height: 16),
+                _buildSignatureSection(),
+              
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: _saveForm,
@@ -692,8 +827,6 @@ List<Widget> _buildTextFormFields() {
     {'key': 'plate', 'label': 'Placa do Cavalo'},
     {'key': 'name', 'label': 'Nome do Motorista'},
     {'key': 'driverID', 'label': 'CPF do Motorista'},
-    {'key': 'nameResp', 'label': 'Responsável pela Aprovação'},
-    {'key': 'cpfResp', 'label': 'CPF da Aprovação'},
     {'key': 'serialNumber', 'label': 'Número de Série'},
     {'key': 'invoiceNumber', 'label': 'Número da Nota Fiscal'},
   ];
