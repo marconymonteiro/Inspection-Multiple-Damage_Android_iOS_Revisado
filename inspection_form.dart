@@ -12,6 +12,8 @@ import 'pdf_generator.dart';
 import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'package:signature/signature.dart'; // Pacote para captura de assinatura
+import 'package:cloud_firestore/cloud_firestore.dart'; // Importe o pacote do Firestore
+import 'package:firebase_storage/firebase_storage.dart';
 
 class FormularioInspecao extends StatefulWidget {
   final String formId; // ID do formulário a ser editado
@@ -47,9 +49,9 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   String _damageDescription = ''; // Descrição da avaria
   List<File> _damagePhotos = []; // Lista de fotos relacionadas a avarias
   final List<File> _photosCarga = []; // Lista final de fotos de carga
-  final List<File> _photosAcomodacao = [];
-  final List<File> _photosCalcamento = [];
-  final List<File> _photosAmarracao = [];
+  List<File> _photosAcomodacao = [];
+  List<File> _photosCalcamento = [];
+  List<File> _photosAmarracao = [];
   File? _photoPlaqueta; // Para a foto da plaqueta
   File? _signatureImage; // Para armazenar a assinatura como imagem
   final SignatureController _signatureController = SignatureController(
@@ -61,6 +63,112 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
   return jsonString; // Exemplo simples
+  }
+
+  // Função de Upload das imagens
+
+  Future<String?> uploadImage(File imageFile, String folder) async {
+  try {
+    // Nome do arquivo único
+    String fileName = DateTime.now().millisecondsSinceEpoch.toString();
+    
+    // Caminho no Storage
+    Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName.jpg');
+
+    // Upload da imagem
+    UploadTask uploadTask = ref.putFile(imageFile);
+    TaskSnapshot snapshot = await uploadTask;
+
+    // Retorna a URL da imagem no Firebase Storage
+    return await snapshot.ref.getDownloadURL();
+  } catch (e) {
+    print("Erro ao enviar imagem: $e");
+    return null;
+  }
+}
+
+  // Salvar as imagens no Firestore e salvar os links no firebase
+
+  Future<void> saveFormData() async {
+  try {
+    final firestore = FirebaseFirestore.instance;
+    final formRef = firestore.collection('inspection').doc(widget.formId);
+
+    // Verificar se o documento já existe no Firestore
+    final docSnapshot = await formRef.get();
+    Map<String, dynamic> existingData = {};
+    if (docSnapshot.exists) {
+      existingData = docSnapshot.data() as Map<String, dynamic>;
+    }
+
+    // Função auxiliar para evitar upload duplicado de imagens
+    Future<String> uploadIfNotExists(File? imageFile, String folder, String? existingUrl) async {
+      if (imageFile == null || existingUrl != null) {
+        return existingUrl ?? ''; // Retorna uma string vazia se não houver imagem
+      }
+      return await uploadImage(imageFile, folder) ?? ''; // Garante que sempre retorna String
+    }
+
+    // Upload das imagens apenas se necessário
+    String? photoPlaquetaUrl = await uploadIfNotExists(
+      _photoPlaqueta,
+      "plaquetas",
+      existingData['photoPlaqueta'],
+    );
+
+    String? signatureImageUrl = await uploadIfNotExists(
+      _signatureImage,
+      "assinaturas",
+      existingData['signatureImage'],
+    );
+
+    List<String> photosAcomodacaoUrls = await Future.wait(
+      _photosAcomodacao.asMap().entries.map((entry) async {
+        int index = entry.key;
+        File file = entry.value;
+        String? existingUrl = existingData['photosAcomodacao']?[index];
+        return await uploadIfNotExists(file, "acomodacao", existingUrl);
+      }),
+    );
+
+    List<String> photosCalcamentoUrls = await Future.wait(
+      _photosCalcamento.asMap().entries.map((entry) async {
+        int index = entry.key;
+        File file = entry.value;
+        String? existingUrl = existingData['photosCalcamento']?[index];
+        return await uploadIfNotExists(file, "calcamento", existingUrl);
+      }),
+    );
+
+    List<String> photosAmarracaoUrls = await Future.wait(
+      _photosAmarracao.asMap().entries.map((entry) async {
+        int index = entry.key;
+        File file = entry.value;
+        String? existingUrl = existingData['photosAmarracao']?[index];
+        return await uploadIfNotExists(file, "amarracao", existingUrl);
+      }),
+    );
+
+    // Salvar os links das imagens no Firestore
+    await formRef.set({
+      'hasDamage': _hasDamage,
+      'selectedDate': _selectedDate?.toIso8601String(),
+      'photosAcomodacao': photosAcomodacaoUrls,
+      'photosCalcamento': photosCalcamentoUrls,
+      'photosAmarracao': photosAmarracaoUrls,
+      'photoPlaqueta': photoPlaquetaUrl,
+      'signatureImage': signatureImageUrl,
+    }, SetOptions(merge: true));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Dados salvos com sucesso!')),
+    );
+  } catch (e) {
+    print("Erro ao salvar dados: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Erro ao salvar dados.')),
+    );
+  }
   }
 
   void _addPhotoToDamage() async {
@@ -207,83 +315,115 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
 
   Future<void> _saveForm() async {
     if (!_formKey.currentState!.validate()) return;
-    final prefs = await SharedPreferences.getInstance();
+
     try {
-     
-      // Salvar dados do formulário
-      for (var entry in _controllers.entries) {
-        await prefs.setString('${widget.formId}-${entry.key}', entry.value.text);
+      // Referência ao Firestore
+      final firestore = FirebaseFirestore.instance;
+      final formRef = firestore.collection('inspection').doc(widget.formId);
+
+      // Upload das imagens para o Firebase Storage
+      String? photoPlaquetaUrl;
+      if (_photoPlaqueta != null) {
+        photoPlaquetaUrl = await uploadImage(_photoPlaqueta!, "plaquetas");
       }
-      await prefs.setString('${widget.formId}-hasDamage', _hasDamage);
-      await prefs.setStringList('${widget.formId}-photosAcomodacao', _photosAcomodacao.map((e) => e.path).toList());
-      await prefs.setStringList('${widget.formId}-photosCalcamento', _photosCalcamento.map((e) => e.path).toList());
-      await prefs.setStringList('${widget.formId}-photosAmarração', _photosAmarracao.map((e) => e.path).toList());
-      await prefs.setString('${widget.formId}-photoPlaqueta', _photoPlaqueta?.path ?? '');
-      await prefs.setString('${widget.formId}-selectedDate', _selectedDate?.toIso8601String() ?? '');
-      await prefs.setString('${widget.formId}-signature', _signatureImage?.path ?? '');
-      // Salvar avarias como JSON
-      final List<Map<String, dynamic>> damagesData = _damages.map((damage) {
-        return {
+
+      String? signatureImageUrl;
+      if (_signatureImage != null) {
+        signatureImageUrl = await uploadImage(_signatureImage!, "assinaturas");
+      }
+
+      List<String> photosAcomodacaoUrls = await Future.wait(
+        _photosAcomodacao.map((file) async {
+          String? url = await uploadImage(file, "acomodacao");
+          return url ?? ""; // Se for null, retorna string vazia
+        }),
+      );
+
+      List<String> photosCalcamentoUrls = await Future.wait(
+        _photosCalcamento.map((file) async {
+          String? url = await uploadImage(file, "calcamento");
+          return url ?? "";
+        }),
+      );
+
+      List<String> photosAmarracaoUrls = await Future.wait(
+        _photosAmarracao.map((file) async {
+          String? url = await uploadImage(file, "amarracao");
+          return url ?? "";
+        }),
+      );
+
+      // Preparar os dados para salvar no Firestore
+      final Map<String, dynamic> formData = {
+        'name': _controllers['name']!.text,
+        'cpfResp': _controllers['cpfResp']!.text,
+        'serialNumber': _controllers['serialNumber']!.text,
+        'invoiceNumber': _controllers['invoiceNumber']!.text,
+        'placaCarreta': _controllers['placaCarreta']!.text,
+        'equipment': _controllers['equipment']!.text,
+        'freight': _controllers['freight']!.text,
+        'plate': _controllers['plate']!.text,
+        'driverID': _controllers['driverID']!.text,
+        'nameResp': _controllers['nameResp']!.text,
+        'invoiceQtty': _controllers['invoiceQtty']!.text,
+        'invoiceItems': _controllers['invoiceItems']!.text,
+        'selectedDate': _selectedDate?.toIso8601String(),
+        'hasDamage': _hasDamage,
+        'damages': _damages.map((damage) => {
           'description': damage['description'],
-          'photos': (damage['photos'] as List).map((photo) => photo.path).toList(),
-        };
-      }).toList();
-      await prefs.setString('${widget.formId}-damages', jsonEncode(damagesData));
-      // Adicionar o ID do formulário aos salvos
-      final savedForms = prefs.getStringList('savedForms') ?? [];
-      savedForms.add(widget.formId);
-      await prefs.setStringList('savedForms', savedForms);
+          'photos': (damage['photos'] as List<File>).map((photo) async {
+            String? url = await uploadImage(photo, "danos");
+            return url ?? "";
+          }).toList(),
+        }).toList(),
+        'photosAcomodacao': photosAcomodacaoUrls,
+        'photosCalcamento': photosCalcamentoUrls,
+        'photosAmarracao': photosAmarracaoUrls,
+        'photoPlaqueta': photoPlaquetaUrl,
+        'signatureImage': signatureImageUrl,
+      };
+
+      // Salvar no Firestore
+      await formRef.set(formData);
+
+      // Feedback ao usuário
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Formulário editado com sucesso!')),
+        const SnackBar(content: Text('Formulário salvo com sucesso no Firestore!')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erro ao salvar o formulário.')),
+        const SnackBar(content: Text('Erro ao salvar no Firestore.')),
       );
+      print('Erro ao salvar no Firestore: $e');
     }
   }
 
-  Future<void> _loadForm() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      for (var entry in _controllers.entries) {
-        entry.value.text = prefs.getString('${widget.formId}-${entry.key}') ?? '';
+    Future<void> _loadForm() async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final formRef = firestore.collection('inspection').doc(widget.formId);
+
+      final docSnapshot = await formRef.get();
+      if (docSnapshot.exists) {
+        final data = docSnapshot.data() as Map<String, dynamic>;
+
+        setState(() {
+          _hasDamage = data['hasDamage'] ?? 'Selecione';
+          _selectedDate = data['selectedDate'] != null ? DateTime.parse(data['selectedDate']) : null;
+
+          _photosAcomodacao = (data['photosAcomodacao'] as List<dynamic>? ?? []).map((url) => File(url)).toList();
+          _photosCalcamento = (data['photosCalcamento'] as List<dynamic>? ?? []).map((url) => File(url)).toList();
+          _photosAmarracao = (data['photosAmarracao'] as List<dynamic>? ?? []).map((url) => File(url)).toList();
+          _photoPlaqueta = data['photoPlaqueta'] != null ? File(data['photoPlaqueta']) : null;
+          _signatureImage = data['signatureImage'] != null ? File(data['signatureImage']) : null;
+        });
       }
-      _hasDamage = prefs.getString('${widget.formId}-hasDamage') ?? 'Selecione';
-      _photosAcomodacao.addAll(
-        (prefs.getStringList('${widget.formId}-photosAcomodacao') ?? []).map((path) => File(path)),
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro ao carregar dados do Firestore.')),
       );
-      _photosCalcamento.addAll(
-        (prefs.getStringList('${widget.formId}-photosCalcamento') ?? []).map((path) => File(path)),
-      );
-      _photosAmarracao.addAll(
-        (prefs.getStringList('${widget.formId}-photosAmarração') ?? []).map((path) => File(path)),
-      );
-      _photoPlaqueta = prefs.getString('${widget.formId}-photoPlaqueta') != null
-          ? File(prefs.getString('${widget.formId}-photoPlaqueta')!)
-          : null;
-      _selectedDate = prefs.getString('${widget.formId}-selectedDate') != null
-          ? DateTime.parse(prefs.getString('${widget.formId}-selectedDate')!)
-          : null;
-      final signaturePath = prefs.getString('${widget.formId}-signature');
-      if (signaturePath != null) {
-        _signatureImage = File(signaturePath);
-      }
-      final damagesJson = prefs.getString('${widget.formId}-damages');
-      if (damagesJson != null) {
-        try {
-          final decodedDamages = jsonDecode(damagesJson) as List;
-          _damages = decodedDamages.map((damage) {
-            return {
-              'description': damage['description'] as String,
-              'photos': (damage['photos'] as List).map((path) => File(path as String)).toList(),
-            };
-          }).toList();
-        } catch (e) {
-          _damages = [];
-        }
-      }
-    });
+      print('Erro ao carregar dados do Firestore: $e');
+    }
   }
 
   Future<Uint8List> _compressImage(File image) async {
