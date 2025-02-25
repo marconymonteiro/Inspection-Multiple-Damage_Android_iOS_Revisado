@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:inspection_multiple_damage/pdf_generator.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_extend/share_extend.dart';
+import 'package:http/http.dart' as http;
 
 class EditarFormulario extends StatefulWidget {
   final String formId; // ID do formulário a ser visualizado
@@ -55,6 +57,15 @@ class _EditarFormularioState extends State<EditarFormulario> {
     _loadFormData();
   }
 
+  // Função para baixar uma imagem a partir de uma URL e salvar como File
+  Future<File> _urlToFile(String imageUrl) async {
+    final response = await http.get(Uri.parse(imageUrl));
+    final documentDirectory = await getApplicationDocumentsDirectory();
+    final file = File('${documentDirectory.path}/${DateTime.now().millisecondsSinceEpoch}.png');
+    file.writeAsBytesSync(response.bodyBytes);
+    return file;
+  }
+
   // Carrega os dados do Firestore usando o formId
   Future<void> _loadFormData() async {
     try {
@@ -86,11 +97,37 @@ class _EditarFormularioState extends State<EditarFormulario> {
               ? DateTime.parse(formData!['selectedDate'])
               : null;
         });
+        await _loadPhotos();
       } else {
         print('Documento não encontrado.');
       }
     } catch (e) {
       print('Erro ao carregar dados do Firestore: $e');
+    }
+  }
+
+  // Carrega as fotos a partir das URLs do Firestore
+  Future<void> _loadPhotos() async {
+    if (formData?['photosAcomodacao'] != null) {
+      for (var url in formData!['photosAcomodacao']) {
+        _photosAcomodacao.add(await _urlToFile(url));
+      }
+    }
+    if (formData?['photosCalcamento'] != null) {
+      for (var url in formData!['photosCalcamento']) {
+        _photosCalcamento.add(await _urlToFile(url));
+      }
+    }
+    if (formData?['photosAmarracao'] != null) {
+      for (var url in formData!['photosAmarracao']) {
+        _photosAmarracao.add(await _urlToFile(url));
+      }
+    }
+    if (formData?['photoPlaqueta'] != null) {
+      _photoPlaqueta = await _urlToFile(formData!['photoPlaqueta']);
+    }
+    if (formData?['signatureImage'] != null) {
+      _signatureImage = await _urlToFile(formData!['signatureImage']);
     }
   }
 
@@ -229,7 +266,7 @@ class _EditarFormularioState extends State<EditarFormulario> {
 
     try {
       // Gera o PDF
-final pdfFile = await PdfGenerator().generatePdf(
+    final pdfFile = await PdfGenerator().generatePdf(
       name: _controllers['name']!.text,
       cpfResp: _controllers['cpfResp']!.text,
       serialNumber: _controllers['serialNumber']!.text,
