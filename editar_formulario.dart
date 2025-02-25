@@ -56,81 +56,42 @@ class _EditarFormularioState extends State<EditarFormulario> {
   }
 
   // Carrega os dados do Firestore usando o formId
-Future<void> _loadFormData() async {
-  try {
-    final firestore = FirebaseFirestore.instance;
-    final docSnapshot =
-        await firestore.collection('inspection').doc(widget.formId).get();
+  Future<void> _loadFormData() async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final docSnapshot =
+          await firestore.collection('inspection').doc(widget.formId).get();
 
-    if (docSnapshot.exists) {
-      setState(() {
-        formData = docSnapshot.data() as Map<String, dynamic>;
+      if (docSnapshot.exists) {
+        setState(() {
+          formData = docSnapshot.data() as Map<String, dynamic>;
 
-        // Inicializa os controladores com os valores do Firestore
-        _controllers['name']?.text = formData?['name'] ?? '';
-        _controllers['cpfResp']?.text = formData?['cpfResp'] ?? '';
-        _controllers['serialNumber']?.text = formData?['serialNumber'] ?? '';
-        _controllers['invoiceNumber']?.text = formData?['invoiceNumber'] ?? '';
-        _controllers['placaCarreta']?.text = formData?['placaCarreta'] ?? '';
-        _controllers['equipment']?.text = formData?['equipment'] ?? '';
-        _controllers['freight']?.text = formData?['freight'] ?? '';
-        _controllers['plate']?.text = formData?['plate'] ?? '';
-        _controllers['driverID']?.text = formData?['driverID'] ?? '';
-        _controllers['nameResp']?.text = formData?['nameResp'] ?? '';
-        _controllers['invoiceQtty']?.text = formData?['invoiceQtty'] ?? '';
-        _controllers['invoiceItems']?.text = formData?['invoiceItems'] ?? '';
+          // Inicializa os controladores com os valores do Firestore
+          _controllers['name']?.text = formData?['name'] ?? '';
+          _controllers['cpfResp']?.text = formData?['cpfResp'] ?? '';
+          _controllers['serialNumber']?.text = formData?['serialNumber'] ?? '';
+          _controllers['invoiceNumber']?.text = formData?['invoiceNumber'] ?? '';
+          _controllers['placaCarreta']?.text = formData?['placaCarreta'] ?? '';
+          _controllers['equipment']?.text = formData?['equipment'] ?? '';
+          _controllers['freight']?.text = formData?['freight'] ?? '';
+          _controllers['plate']?.text = formData?['plate'] ?? '';
+          _controllers['driverID']?.text = formData?['driverID'] ?? '';
+          _controllers['nameResp']?.text = formData?['nameResp'] ?? '';
+          _controllers['invoiceQtty']?.text = formData?['invoiceQtty'] ?? '';
+          _controllers['invoiceItems']?.text = formData?['invoiceItems'] ?? '';
 
-        _controllers['damageDescription']?.text = formData?['damageDescription'] ?? '';
+          _controllers['damageDescription']?.text = formData?['damageDescription'] ?? '';
 
-        _selectedDate = formData?['selectedDate'] != null
-            ? DateTime.parse(formData!['selectedDate'])
-            : null;
-      });
-    } else {
-      print('Documento não encontrado.');
+          _selectedDate = formData?['selectedDate'] != null
+              ? DateTime.parse(formData!['selectedDate'])
+              : null;
+        });
+      } else {
+        print('Documento não encontrado.');
+      }
+    } catch (e) {
+      print('Erro ao carregar dados do Firestore: $e');
     }
-  } catch (e) {
-    print('Erro ao carregar dados do Firestore: $e');
-  }
-  }
-
-  Future<void> _submitForm() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    // Verifica se os dados já foram carregados, senão busca do Firestore
-    if (formData == null) {
-      await _loadFormData();
-    }
-
-    final pdfFile = await PdfGenerator().generatePdf(
-      name: _controllers['name']!.text,
-      cpfResp: _controllers['cpfResp']!.text,
-      serialNumber: _controllers['serialNumber']!.text,
-      invoiceNumber: _controllers['invoiceNumber']!.text,
-      placaCarreta: _controllers['placaCarreta']!.text,
-      equipment: _controllers['equipment']!.text,
-      freight: _controllers['freight']!.text,
-      plate: _controllers['plate']!.text,
-      driverID: _controllers['driverID']!.text,
-      nameResp: _controllers['nameResp']!.text,
-      invoiceQtty: _controllers['invoiceQtty']!.text,
-      invoiceItems: _controllers['invoiceItems']!.text,
-      reportDate: _selectedDate != null
-          ? DateFormat('dd/MM/yyyy', 'pt_BR').format(_selectedDate!)
-          : 'Data não selecionada',
-      hasDamage: _hasDamage == 'Sim',
-      damageDescription: _controllers['damageDescription']!.text,
-      photosCarga: _photosCarga,
-      photosAcomodacao: _photosAcomodacao,
-      photosAmarracao: _photosAmarracao,
-      photosCalcamento: _photosCalcamento,
-      photosDamage: _photosDamage,
-      damagesData: _damages,
-      photoPlaqueta: _photoPlaqueta,
-      signatureImage: _signatureImage,
-    );
-
-    await ShareExtend.share(pdfFile.path, 'application/pdf');
   }
 
   // Exibe uma imagem com base no URL
@@ -255,6 +216,55 @@ Future<void> _loadFormData() async {
         ),
       ],
     );
+  }
+
+  // Função para gerar o PDF e compartilhar
+  Future<void> _generateAndSharePDF() async {
+    if (formData == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Dados do formulário não carregados.')),
+      );
+      return;
+    }
+
+    try {
+      // Gera o PDF
+final pdfFile = await PdfGenerator().generatePdf(
+      name: _controllers['name']!.text,
+      cpfResp: _controllers['cpfResp']!.text,
+      serialNumber: _controllers['serialNumber']!.text,
+      invoiceNumber: _controllers['invoiceNumber']!.text,
+      placaCarreta: _controllers['placaCarreta']!.text,
+      equipment: _controllers['equipment']!.text,
+      freight: _controllers['freight']!.text,
+      plate: _controllers['plate']!.text,
+      driverID: _controllers['driverID']!.text,
+      nameResp: _controllers['nameResp']!.text,
+      invoiceQtty: _controllers['invoiceQtty']!.text,
+      invoiceItems: _controllers['invoiceItems']!.text,
+
+      reportDate: _selectedDate != null
+          ? DateFormat('dd/mm/yyyy', 'pt_BR').format(_selectedDate!)
+          : 'Data não selecionada',
+      hasDamage: _hasDamage == 'Sim',
+      damageDescription: _controllers['damageDescription']!.text,
+      photosCarga: _photosCarga,
+      photosAcomodacao: _photosAcomodacao,
+      photosAmarracao: _photosAmarracao,
+      photosCalcamento: _photosCalcamento,
+      photosDamage: _photosDamage,
+      damagesData: _damages, //incluído para teste de emissão de PDF
+      photoPlaqueta: _photoPlaqueta,
+      signatureImage: _signatureImage,
+    );
+
+      // Compartilha o PDF
+      ShareExtend.share(pdfFile.path, 'application/pdf');
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao gerar PDF: $e')),
+      );
+    }
   }
 
   @override
@@ -400,12 +410,13 @@ Future<void> _loadFormData() async {
                   ),
                 ),
               ),
-            const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _submitForm,
-                child: const Text('Gerar PDF'),
+              // Botão para gerar PDF
+              Center(
+                child: ElevatedButton(
+                  onPressed: _generateAndSharePDF,
+                  child: Text('Gerar PDF'),
+                ),
               ),
-            
             ],
           ),
         ),
