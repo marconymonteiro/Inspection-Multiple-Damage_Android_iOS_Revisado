@@ -123,10 +123,10 @@ class _EditarFormularioState extends State<EditarFormulario> {
         _photosAmarracao.add(await _urlToFile(url));
       }
     }
-    if (formData?['photoPlaqueta'] != null) {
+    if (formData?['photoPlaqueta'] != null && formData!['photoPlaqueta'].isNotEmpty) {
       _photoPlaqueta = await _urlToFile(formData!['photoPlaqueta']);
     }
-    if (formData?['signatureImage'] != null) {
+    if (formData?['signatureImage'] != null && formData!['signatureImage'].isNotEmpty) {
       _signatureImage = await _urlToFile(formData!['signatureImage']);
     }
   }
@@ -378,7 +378,7 @@ class _EditarFormularioState extends State<EditarFormulario> {
               // Fotos da Amarração
               _buildImageList(formData!['photosAmarracao'] ?? [], 'Fotos da Amarração'),
               // Foto da Plaqueta
-              _buildImageList([formData!['photoPlaqueta']].whereType<String>().toList(), 'Foto da Plaqueta'),
+              _buildImageList([formData!['photoPlaqueta']] ?? [], 'Foto da Plaqueta'),
               // Sessão de Aprovação
               Card(
                 elevation: 2,
@@ -400,7 +400,7 @@ class _EditarFormularioState extends State<EditarFormulario> {
                       _buildTextDetail('Responsável pela Aprovação', formData!['nameResp']),
                       _buildTextDetail('CPF da Aprovação', formData!['cpfResp']),
                       const SizedBox(height: 8),
-                      _buildSignatureSection(formData!['signatureImage']),
+                      _buildSignatureSection((formData!['signatureImage']) ?? []),
                     ],
                   ),
                 ),
