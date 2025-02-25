@@ -82,47 +82,41 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     print("Erro ao enviar imagem: $e");
     return null;
   }
-}
-
- // Gera um hash MD5 - Nome único para as imagens
-  Future<String> generateImageHash(File imageFile) async {
-    final bytes = await imageFile.readAsBytes();
-    return md5.convert(bytes).toString(); // Gera um hash MD5
   }
 
     // Função auxiliar para evitar upload duplicado de imagens
-  Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existingUrl) async {
-    if (imageFile == null || existingUrl != null) {
-      return existingUrl; // Return the existing URL if the file hasn't changed
-    }
+Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existingUrl) async {
+  if (imageFile == null || existingUrl != null) {
+    return existingUrl; // Return the existing URL if the file hasn't changed
+  }
 
+  try {
+    // Generate a unique hash for the file to avoid duplicates
+    final bytes = await imageFile.readAsBytes();
+    final fileHash = md5.convert(bytes).toString();
+    final fileName = '$fileHash.jpg';
+
+    // Reference to the file in Firebase Storage
+    Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName');
+    
+    // Check if the file already exists
     try {
-      // Generate a unique hash for the file to avoid duplicates
-      final bytes = await imageFile.readAsBytes();
-      final fileHash = md5.convert(bytes).toString();
-      final fileName = '$fileHash.jpg';
-
-      // Reference to the file in Firebase Storage
-      Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName');
-
-      // Check if the file already exists
-      final metadata = await ref.getMetadata().catchError((_) => null);
-      if (metadata != null) {
-        // File already exists, return its download URL
-        return await ref.getDownloadURL();
-      }
-
-      // Upload the file if it doesn't exist
+      final FullMetadata metadata = await ref.getMetadata();
+      // File already exists, return its download URL
+      return await ref.getDownloadURL();
+    } catch (e) {
+      // If metadata retrieval fails, assume the file does not exist and proceed to upload
       UploadTask uploadTask = ref.putFile(imageFile);
       TaskSnapshot snapshot = await uploadTask;
 
       // Return the download URL of the uploaded file
       return await snapshot.ref.getDownloadURL();
-    } catch (e) {
-      print("Erro ao enviar imagem: $e");
-      return null;
     }
-    }
+  } catch (e) {
+    print("Erro ao enviar imagem: $e");
+    return null;
+  }
+  }
 
     Future<void> _loadForm() async {
       try {
@@ -154,7 +148,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
 
   // Salvar as imagens no Firestore e salvar os links no firebase
 
-  Future<void> _saveForm() async {
+Future<void> _saveForm() async {
   if (!_formKey.currentState!.validate()) return;
 
   try {
@@ -182,32 +176,56 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       existingData['signatureImage'],
     );
 
-    List<String> photosAcomodacaoUrls = await Future.wait(
-      _photosAcomodacao.asMap().entries.map((entry) async {
-        int index = entry.key;
-        File file = entry.value;
-        String? existingUrl = existingData['photosAcomodacao']?[index];
-        return await uploadIfNotExists(file, "acomodacao", existingUrl) ?? '';
-      }),
-    );
+    // Verifica se as listas de imagens não estão vazias antes de mapeá-las
+    List<String> photosAcomodacaoUrls = _photosAcomodacao.isNotEmpty
+        ? await Future.wait(
+            _photosAcomodacao.asMap().entries.map((entry) async {
+              int index = entry.key;
+              File file = entry.value;
+              String? existingUrl = existingData['photosAcomodacao']?[index];
+              return await uploadIfNotExists(file, "acomodacao", existingUrl) ?? '';
+            }),
+          )
+        : [];
 
-    List<String> photosCalcamentoUrls = await Future.wait(
-      _photosCalcamento.asMap().entries.map((entry) async {
-        int index = entry.key;
-        File file = entry.value;
-        String? existingUrl = existingData['photosCalcamento']?[index];
-        return await uploadIfNotExists(file, "calcamento", existingUrl) ?? '';
-      }),
-    );
+    List<String> photosCalcamentoUrls = _photosCalcamento.isNotEmpty
+        ? await Future.wait(
+            _photosCalcamento.asMap().entries.map((entry) async {
+              int index = entry.key;
+              File file = entry.value;
+              String? existingUrl = existingData['photosCalcamento']?[index];
+              return await uploadIfNotExists(file, "calcamento", existingUrl) ?? '';
+            }),
+          )
+        : [];
 
-    List<String> photosAmarracaoUrls = await Future.wait(
-      _photosAmarracao.asMap().entries.map((entry) async {
-        int index = entry.key;
-        File file = entry.value;
-        String? existingUrl = existingData['photosAmarracao']?[index];
-        return await uploadIfNotExists(file, "amarracao", existingUrl) ?? '';
-      }),
-    );
+    List<String> photosAmarracaoUrls = _photosAmarracao.isNotEmpty
+        ? await Future.wait(
+            _photosAmarracao.asMap().entries.map((entry) async {
+              int index = entry.key;
+              File file = entry.value;
+              String? existingUrl = existingData['photosAmarracao']?[index];
+              return await uploadIfNotExists(file, "amarracao", existingUrl) ?? '';
+            }),
+          )
+        : [];
+
+    // Verifica se a lista de danos não está vazia antes de mapeá-la
+    List<Map<String, dynamic>> damagesData = _damages.isNotEmpty
+        ? await Future.wait(
+            _damages.map((damage) async {
+              return {
+                'description': damage['description'],
+                'photos': await Future.wait(
+                  (damage['photos'] as List<File>).map((photo) async {
+                    String? url = await uploadIfNotExists(photo, "danos", null);
+                    return url ?? "";
+                  }).toList(),
+                ),
+              };
+            }),
+          )
+        : [];
 
     // Preparar os dados para salvar no Firestore
     final Map<String, dynamic> formData = {
@@ -225,13 +243,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       'invoiceItems': _controllers['invoiceItems']!.text,
       'selectedDate': _selectedDate?.toIso8601String(),
       'hasDamage': _hasDamage,
-      'damages': _damages.map((damage) => {
-            'description': damage['description'],
-            'photos': (damage['photos'] as List<File>).map((photo) async {
-              String? url = await uploadIfNotExists(photo, "danos", null);
-              return url ?? "";
-            }).toList(),
-          }).toList(),
+      'damages': damagesData,
       'photosAcomodacao': photosAcomodacaoUrls,
       'photosCalcamento': photosCalcamentoUrls,
       'photosAmarracao': photosAmarracaoUrls,
@@ -612,6 +624,8 @@ Future<void> _pickPlaquetaPhoto() async {
       photosCalcamento: _photosCalcamento,
       photosDamage: _photosDamage,
       damagesData: _damages, //incluído para teste de emissão de PDF
+      photoPlaqueta: _photoPlaqueta,
+      signatureImage: _signatureImage,
     );
 
     await ShareExtend.share(pdfFile.path, 'application/pdf');
