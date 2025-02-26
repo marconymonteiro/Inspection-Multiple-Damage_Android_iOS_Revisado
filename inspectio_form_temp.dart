@@ -43,7 +43,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
   String _hasDamage = 'Selecione'; // Variável para controlar o estado de seleção da avaria
-  List<Map<String, Object>> _damages = []; // Lista que conterá mapas com tipos garantidos
+  List<Map<String, dynamic>> _damages = []; // Lista que conterá mapas com tipos garantidos
   Map<String, Object>? convertedMap; // Inicialize como nulo, será usado após a conversão
   String _damageDescription = ''; // Descrição da avaria
   List<File> _damagePhotos = []; // Lista de fotos relacionadas a avarias
@@ -214,26 +214,21 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
 
     // Upload das imagens de avarias
     List<Map<String, dynamic>> damagesData = [];
-    if (_damages.isNotEmpty) {
-      for (var damage in _damages) {
-        List<String> photoUrls = [];
+    for (var damage in _damages) {
+      List<String> photoUrls = [];
 
-        // Verifica se 'photos' existe e é uma lista de File
-        if (damage['photos'] != null && damage['photos'] is List<File>) {
-          for (File photo in damage['photos'] as List<File>) {
-            String? url = await uploadImage(photo, "danos");
-            if (url != null) {
-              photoUrls.add(url);
-            }
+      // Verifica se 'photos' existe e é uma lista de URLs
+      if (damage['photos'] != null && damage['photos'] is List<String>) {
+        if (damage['photos'] is List) {
+            photoUrls = List<String>.from(damage['photos'] as List);
           }
-        }
-
-        // Adiciona a avaria com as URLs das fotos
-        damagesData.add({
-          'description': damage['description'],
-          'photos': photoUrls,
-        });
       }
+
+      // Adiciona a avaria com as URLs das fotos
+      damagesData.add({
+        'description': damage['description'],
+        'photos': photoUrls,
+      });
     }
 
       // Calcula o número total de tarefas
@@ -403,7 +398,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
         };
 
         setState(() {
-          List<Map<String, dynamic>> _damages = []; // Altere o tipo aqui
+          _damages.add(dynamicMap); // Altere o tipo aqui
           _damageDescription = ''; // Limpa a descrição
           _damagePhotos.clear(); // Limpa a lista de fotos
         });
