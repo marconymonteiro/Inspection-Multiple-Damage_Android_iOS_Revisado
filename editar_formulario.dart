@@ -39,7 +39,7 @@ class _EditarFormularioState extends State<EditarFormulario> {
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
   String _hasDamage = 'Selecione'; // Variável para controlar o estado de seleção da avaria
-  List<Map<String, Object>> _damages = []; // Lista que conterá mapas com tipos garantidos
+  List<Map<String, dynamic>> _damages = []; // Lista que conterá mapas com tipos garantidos
   Map<String, Object>? convertedMap; // Inicialize como nulo, será usado após a conversão
   String _damageDescription = ''; // Descrição da avaria
   List<File> _damagePhotos = []; // Lista de fotos relacionadas a avarias
@@ -96,6 +96,18 @@ class _EditarFormularioState extends State<EditarFormulario> {
           _selectedDate = formData?['selectedDate'] != null
               ? DateTime.parse(formData!['selectedDate'])
               : null;
+
+          _damages = (formData?['damages'] as List<dynamic>?)
+            ?.map((damage) => {
+                  'description': damage['description'] ?? 'Sem descrição',
+                  'photos': (damage['photos'] as List<dynamic>?)
+                      ?.map((url) => url.toString()) // Mantenha as URLs como strings
+                      .toList() ??
+                      [],
+                })
+            .toList() ??
+            [];
+
         });
         await _loadPhotos();
       } else {
@@ -129,6 +141,7 @@ class _EditarFormularioState extends State<EditarFormulario> {
     if (formData?['signatureImage'] != null && formData!['signatureImage'].isNotEmpty) {
       _signatureImage = await _urlToFile(formData!['signatureImage']);
     }
+
   }
 
   // Exibe uma imagem com base no URL
@@ -267,32 +280,42 @@ class _EditarFormularioState extends State<EditarFormulario> {
     try {
       // Gera o PDF
     final pdfFile = await PdfGenerator().generatePdf(
-      name: _controllers['name']!.text,
-      cpfResp: _controllers['cpfResp']!.text,
-      serialNumber: _controllers['serialNumber']!.text,
-      invoiceNumber: _controllers['invoiceNumber']!.text,
-      placaCarreta: _controllers['placaCarreta']!.text,
-      equipment: _controllers['equipment']!.text,
-      freight: _controllers['freight']!.text,
-      plate: _controllers['plate']!.text,
-      driverID: _controllers['driverID']!.text,
-      nameResp: _controllers['nameResp']!.text,
-      invoiceQtty: _controllers['invoiceQtty']!.text,
-      invoiceItems: _controllers['invoiceItems']!.text,
+    name: _controllers['name']!.text,
+    cpfResp: _controllers['cpfResp']!.text,
+    serialNumber: _controllers['serialNumber']!.text,
+    invoiceNumber: _controllers['invoiceNumber']!.text,
+    placaCarreta: _controllers['placaCarreta']!.text,
+    equipment: _controllers['equipment']!.text,
+    freight: _controllers['freight']!.text,
+    plate: _controllers['plate']!.text,
+    driverID: _controllers['driverID']!.text,
+    nameResp: _controllers['nameResp']!.text,
+    invoiceQtty: _controllers['invoiceQtty']!.text,
+    invoiceItems: _controllers['invoiceItems']!.text,
+    reportDate: _selectedDate != null
+        ? DateFormat('dd/MM/yyyy', 'pt_BR').format(_selectedDate!)
+        : 'Data não selecionada',
+    hasDamage: _hasDamage == 'Sim',
+    damageDescription: _controllers['damageDescription']!.text,
+    photosCarga: _photosCarga,
+    photosAcomodacao: _photosAcomodacao,
+    photosCalcamento: _photosCalcamento,
+    photosAmarracao: _photosAmarracao,
+    //damagesData: _damages, // Passa as fotos dos danos aqui
+    photoPlaqueta: _photoPlaqueta,
+    signatureImage: _signatureImage,
+    
+    damagesData: (formData!['damages'] as List<dynamic>?)
+      ?.map((damage) => {
+            'description': damage['description'] ?? 'Sem descrição',
+            'photos': (damage['photos'] as List<dynamic>?)
+                ?.map((url) => url.toString()) // Mantém os URLs como strings
+                .toList() ??
+                [],
+          })
+      .toList() ??
+      [],
 
-      reportDate: _selectedDate != null
-          ? DateFormat('dd/mm/yyyy', 'pt_BR').format(_selectedDate!)
-          : 'Data não selecionada',
-      hasDamage: _hasDamage == 'Sim',
-      damageDescription: _controllers['damageDescription']!.text,
-      photosCarga: _photosCarga,
-      photosAcomodacao: _photosAcomodacao,
-      photosAmarracao: _photosAmarracao,
-      photosCalcamento: _photosCalcamento,
-      photosDamage: _photosDamage,
-      damagesData: _damages, //incluído para teste de emissão de PDF
-      photoPlaqueta: _photoPlaqueta,
-      signatureImage: _signatureImage,
     );
 
       // Compartilha o PDF
