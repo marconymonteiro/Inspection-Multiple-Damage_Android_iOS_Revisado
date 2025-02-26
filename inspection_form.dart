@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:share_extend/share_extend.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'pdf_generator.dart';
 import 'package:image/image.dart' as img;
 import 'package:signature/signature.dart'; // Pacote para captura de assinatura
@@ -11,6 +12,7 @@ import 'package:cloud_firestore/cloud_firestore.dart'; // Importe o pacote do Fi
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class FormularioInspecao extends StatefulWidget {
   final String formId; // ID do formulário a ser editado
@@ -56,6 +58,9 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     penColor: Colors.black,
     exportBackgroundColor: Colors.white,
   );
+    // Variável para controlar o progresso
+  double _progress = 0.0;
+  bool _isLoading = false;
 
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
@@ -85,7 +90,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   }
 
     // Função auxiliar para evitar upload duplicado de imagens
-Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existingUrl) async {
+  Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existingUrl) async {
   if (imageFile == null || existingUrl != null) {
     return existingUrl; // Return the existing URL if the file hasn't changed
   }
@@ -118,7 +123,45 @@ Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existi
   }
   }
 
-    Future<void> _loadForm() async {
+  // Salva o formulário localmente até que seja estabelecida a conexão
+  Future<void> saveFormLocally(Map<String, dynamic> formData) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingForms = prefs.getStringList('pendingForms') ?? [];
+
+    // Adiciona novo formulário na lista de pendentes
+    pendingForms.add(jsonEncode(formData));
+    await prefs.setStringList('pendingForms', pendingForms);
+  }
+
+  Future<void> checkAndSendPendingForms() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingForms = prefs.getStringList('pendingForms') ?? [];
+
+    if (pendingForms.isEmpty) return;
+
+    var connectivityResult = await Connectivity().checkConnectivity();
+    bool hasInternet = connectivityResult != ConnectivityResult.none;
+
+    if (hasInternet) {
+      final firestore = FirebaseFirestore.instance;
+
+      for (String formJson in pendingForms) {
+        Map<String, dynamic> formData = jsonDecode(formJson);
+
+        // Gera um novo ID para cada formulário enviado
+        String formId = firestore.collection('inspection').doc().id;
+
+        await firestore.collection('inspection').doc(formId).set(formData);
+      }
+
+      // Limpa os formulários pendentes depois de enviar
+      await prefs.remove('pendingForms');
+
+      print("Todos os formulários pendentes foram enviados!");
+    }
+  }
+
+  Future<void> _loadForm() async {
       try {
         final firestore = FirebaseFirestore.instance;
         final formRef = firestore.collection('inspection').doc(widget.formId);
@@ -148,122 +191,162 @@ Future<String?> uploadIfNotExists(File? imageFile, String folder, String? existi
 
   // Salvar as imagens no Firestore e salvar os links no firebase
 
-Future<void> _saveForm() async {
-  if (!_formKey.currentState!.validate()) return;
+  Future<void> _saveForm() async {
+    if (!_formKey.currentState!.validate()) return;
 
-  try {
-    // Referência ao Firestore
-    final firestore = FirebaseFirestore.instance;
-    final formRef = firestore.collection('inspection').doc(widget.formId);
+    setState(() {
+      _isLoading = true; // Ativa o estado de carregamento
+      _progress = 0.0; // Reseta o progresso
+    });
 
-    // Carrega os dados existentes do formulário
-    final docSnapshot = await formRef.get();
-    Map<String, dynamic> existingData = {};
-    if (docSnapshot.exists) {
-      existingData = docSnapshot.data() as Map<String, dynamic>;
+    try {
+      // Referência ao Firestore
+      final firestore = FirebaseFirestore.instance;
+      final formRef = firestore.collection('inspection').doc(widget.formId);
+
+      // Carrega os dados existentes do formulário
+      final docSnapshot = await formRef.get();
+      Map<String, dynamic> existingData = {};
+      if (docSnapshot.exists) {
+        existingData = docSnapshot.data() as Map<String, dynamic>;
+      }
+
+      // Calcula o número total de tarefas
+      int totalTasks = 1 + // Para a foto da plaqueta
+          1 + // Para a assinatura
+          _photosAcomodacao.length +
+          _photosCalcamento.length +
+          _photosAmarracao.length;
+
+      int completedTasks = 0;
+
+      // Função para atualizar o progresso global
+      void updateProgress() {
+        setState(() {
+          _progress = completedTasks / totalTasks;
+        });
+      }
+
+      // Upload da foto da plaqueta
+      String? photoPlaquetaUrl = await _uploadFile(
+        _photoPlaqueta,
+        "plaquetas",
+        existingData['photoPlaqueta'],
+      );
+      completedTasks++;
+      updateProgress();
+
+      // Upload da assinatura
+      String? signatureImageUrl = await _uploadFile(
+        _signatureImage,
+        "assinaturas",
+        existingData['signatureImage'],
+      );
+      completedTasks++;
+      updateProgress();
+
+      // Upload das fotos de acomodação
+      List<String> photosAcomodacaoUrls = await Future.wait(
+        _photosAcomodacao.asMap().entries.map((entry) async {
+          int index = entry.key;
+          File file = entry.value;
+          String? url = await _uploadFile(file, "acomodacao", existingData['photosAcomodacao']?[index]);
+          completedTasks++;
+          updateProgress();
+          return url ?? "";
+        }),
+      );
+
+      // Upload das fotos de calcamento
+      List<String> photosCalcamentoUrls = await Future.wait(
+        _photosCalcamento.asMap().entries.map((entry) async {
+          int index = entry.key;
+          File file = entry.value;
+          String? url = await _uploadFile(file, "calcamento", existingData['photosCalcamento']?[index]);
+          completedTasks++;
+          updateProgress();
+          return url ?? "";
+        }),
+      );
+
+      // Upload das fotos de amarração
+      List<String> photosAmarracaoUrls = await Future.wait(
+        _photosAmarracao.asMap().entries.map((entry) async {
+          int index = entry.key;
+          File file = entry.value;
+          String? url = await _uploadFile(file, "amarracao", existingData['photosAmarracao']?[index]);
+          completedTasks++;
+          updateProgress();
+          return url ?? "";
+        }),
+      );
+
+      // Preparar os dados para salvar no Firestore
+      final Map<String, dynamic> formData = {
+        'name': _controllers['name']!.text,
+        'cpfResp': _controllers['cpfResp']!.text,
+        'serialNumber': _controllers['serialNumber']!.text,
+        'invoiceNumber': _controllers['invoiceNumber']!.text,
+        'placaCarreta': _controllers['placaCarreta']!.text,
+        'equipment': _controllers['equipment']!.text,
+        'freight': _controllers['freight']!.text,
+        'plate': _controllers['plate']!.text,
+        'driverID': _controllers['driverID']!.text,
+        'nameResp': _controllers['nameResp']!.text,
+        'invoiceQtty': _controllers['invoiceQtty']!.text,
+        'invoiceItems': _controllers['invoiceItems']!.text,
+        'selectedDate': _selectedDate?.toIso8601String(),
+        'hasDamage': _hasDamage,
+        'damages': _damages,
+        'photosAcomodacao': photosAcomodacaoUrls,
+        'photosCalcamento': photosCalcamentoUrls,
+        'photosAmarracao': photosAmarracaoUrls,
+        'photoPlaqueta': photoPlaquetaUrl,
+        'signatureImage': signatureImageUrl,
+      };
+
+      // Salvar no Firestore
+      await formRef.set(formData, SetOptions(merge: true));
+
+      // Feedback ao usuário
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Formulário salvo no Firestore!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro ao salvar no Firestore.')),
+      );
+      print('Erro ao salvar no Firestore: $e');
+    } finally {
+      setState(() {
+        _isLoading = false; // Desativa o estado de carregamento
+      });
+    }
+  }
+
+  // Monitora o progresso de envio do formulário
+  Future<String?> _uploadFile(File? file, String folder, String? existingUrl) async {
+    if (file == null || existingUrl != null) {
+      return existingUrl;
     }
 
-    // Upload das imagens apenas se necessário
-    String? photoPlaquetaUrl = await uploadIfNotExists(
-      _photoPlaqueta,
-      "plaquetas",
-      existingData['photoPlaqueta'],
-    );
+    try {
+      String fileName = DateTime.now().millisecondsSinceEpoch.toString();
+      Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName.jpg');
+      UploadTask uploadTask = ref.putFile(file);
 
-    String? signatureImageUrl = await uploadIfNotExists(
-      _signatureImage,
-      "assinaturas",
-      existingData['signatureImage'],
-    );
+      // Monitora o progresso do upload
+      uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
+        double taskProgress = snapshot.bytesTransferred / snapshot.totalBytes;
+        print('Progresso do upload: ${(taskProgress * 100).toStringAsFixed(2)}%');
+      });
 
-    // Verifica se as listas de imagens não estão vazias antes de mapeá-las
-    List<String> photosAcomodacaoUrls = _photosAcomodacao.isNotEmpty
-        ? await Future.wait(
-            _photosAcomodacao.asMap().entries.map((entry) async {
-              int index = entry.key;
-              File file = entry.value;
-              String? existingUrl = existingData['photosAcomodacao']?[index];
-              return await uploadIfNotExists(file, "acomodacao", existingUrl) ?? '';
-            }),
-          )
-        : [];
-
-    List<String> photosCalcamentoUrls = _photosCalcamento.isNotEmpty
-        ? await Future.wait(
-            _photosCalcamento.asMap().entries.map((entry) async {
-              int index = entry.key;
-              File file = entry.value;
-              String? existingUrl = existingData['photosCalcamento']?[index];
-              return await uploadIfNotExists(file, "calcamento", existingUrl) ?? '';
-            }),
-          )
-        : [];
-
-    List<String> photosAmarracaoUrls = _photosAmarracao.isNotEmpty
-        ? await Future.wait(
-            _photosAmarracao.asMap().entries.map((entry) async {
-              int index = entry.key;
-              File file = entry.value;
-              String? existingUrl = existingData['photosAmarracao']?[index];
-              return await uploadIfNotExists(file, "amarracao", existingUrl) ?? '';
-            }),
-          )
-        : [];
-
-    // Verifica se a lista de danos não está vazia antes de mapeá-la
-    List<Map<String, dynamic>> damagesData = _damages.isNotEmpty
-        ? await Future.wait(
-            _damages.map((damage) async {
-              return {
-                'description': damage['description'],
-                'photos': await Future.wait(
-                  (damage['photos'] as List<File>).map((photo) async {
-                    String? url = await uploadIfNotExists(photo, "danos", null);
-                    return url ?? "";
-                  }).toList(),
-                ),
-              };
-            }),
-          )
-        : [];
-
-    // Preparar os dados para salvar no Firestore
-    final Map<String, dynamic> formData = {
-      'name': _controllers['name']!.text,
-      'cpfResp': _controllers['cpfResp']!.text,
-      'serialNumber': _controllers['serialNumber']!.text,
-      'invoiceNumber': _controllers['invoiceNumber']!.text,
-      'placaCarreta': _controllers['placaCarreta']!.text,
-      'equipment': _controllers['equipment']!.text,
-      'freight': _controllers['freight']!.text,
-      'plate': _controllers['plate']!.text,
-      'driverID': _controllers['driverID']!.text,
-      'nameResp': _controllers['nameResp']!.text,
-      'invoiceQtty': _controllers['invoiceQtty']!.text,
-      'invoiceItems': _controllers['invoiceItems']!.text,
-      'selectedDate': _selectedDate?.toIso8601String(),
-      'hasDamage': _hasDamage,
-      'damages': damagesData,
-      'photosAcomodacao': photosAcomodacaoUrls,
-      'photosCalcamento': photosCalcamentoUrls,
-      'photosAmarracao': photosAmarracaoUrls,
-      'photoPlaqueta': photoPlaquetaUrl,
-      'signatureImage': signatureImageUrl,
-    };
-
-    // Salvar no Firestore
-    await formRef.set(formData, SetOptions(merge: true));
-
-    // Feedback ao usuário
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Formulário salvo com sucesso no Firestore!')),
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Erro ao salvar no Firestore.')),
-    );
-    print('Erro ao salvar no Firestore: $e');
-  }
+      TaskSnapshot taskSnapshot = await uploadTask;
+      return await taskSnapshot.ref.getDownloadURL();
+    } catch (e) {
+      print("Erro ao enviar imagem: $e");
+      return null;
+    }
   }
 
   void _addPhotoToDamage() async {
@@ -276,7 +359,7 @@ Future<void> _saveForm() async {
     }
   }
 
-void _saveDamage() {
+  void _saveDamage() {
   if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
     try {
       // Criamos o mapa dinâmico inicialmente
@@ -635,7 +718,9 @@ Future<void> _pickPlaquetaPhoto() async {
 Widget build(BuildContext context) {
   return Scaffold(
     appBar: AppBar(title: const Text('Formulário de Inspeção')),
-    body: Padding(
+    body: Stack(
+      children: [
+      Padding (
       padding: const EdgeInsets.all(16.0),
       child: SingleChildScrollView(
         child: Form(
@@ -940,7 +1025,29 @@ Widget build(BuildContext context) {
           ),
         ),
       ),
-    ),
+      ),
+      // Tela de carregamento
+        Visibility(
+          visible: _isLoading,
+          child: Container(
+            color: Colors.black.withOpacity(0.5),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(value: _progress),
+                  const SizedBox(height: 16),
+                  Text(
+                    '${(_progress * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        )
+      ],
+    )
   );
 }
 
