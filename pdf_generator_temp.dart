@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -24,48 +25,25 @@ class PdfGenerator {
   }
 
   // Cria uma seção de fotos com título
-    pw.Widget _buildPhotoSection(String title, List<String> photoUrls, List<pw.MemoryImage> images) {
-      if (photoUrls.isEmpty) return pw.SizedBox();
+  pw.Widget _buildPhotoSection(String title, List<pw.MemoryImage> images) {
+    if (images.isEmpty) return pw.SizedBox();
 
-      return pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Text(title, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 10),
-          pw.Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: images.map((image) {
-              return pw.Image(image, width: 180, height: 180);
-            }).toList(),
-          ),
-          pw.SizedBox(height: 20),
-        ],
-      );
-    }
-
-  // Função auxiliar para carregar as imagens de danos
-  Future<Map<String, List<pw.MemoryImage>>> loadDamageImages(List<Map<String, dynamic>> damagesData) async {
-    Map<String, List<pw.MemoryImage>> damageImagesMap = {};
-
-    for (var damage in damagesData) {
-      List<pw.MemoryImage> damageImages = [];
-
-      if (damage['photos'] != null && damage['photos'] is List<String>) {
-        for (var url in damage['photos'] as List<String>) {
-          try {
-            final imageBytes = await _downloadImage(url);
-            damageImages.add(pw.MemoryImage(imageBytes));
-          } catch (e) {
-            print('Erro ao baixar imagem do dano: $e');
-          }
-        }
-      }
-      damageImagesMap[damage['description'] ?? 'Sem descrição'] = damageImages;
-    }
-    return damageImagesMap;
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(title, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 10),
+        pw.Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: images.map((image) {
+            return pw.Image(image, width: 180, height: 180);
+          }).toList(),
+        ),
+        pw.SizedBox(height: 20),
+      ],
+    );
   }
-
 
   // Baixa uma imagem de uma URL de forma assíncrona
   Future<Uint8List> _downloadImage(String url) async {
@@ -119,7 +97,7 @@ class PdfGenerator {
     required List<Map<String, dynamic>> damagesData,
     required File? photoPlaqueta,
     required File? signatureImage,
-    }) async {
+  }) async {
     final pdf = pw.Document();
     final emissionDateTime = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now());
 
@@ -133,22 +111,21 @@ class PdfGenerator {
       final websiteIcon = await _loadIcon('assets/website_icon.png');
 
       // Pré-carregar as imagens das URLs dos danos
-      Map<String, List<pw.MemoryImage>> damageImagesMap = {};
-        for (var damage in damagesData) {
-          List<pw.MemoryImage> damageImages = [];
-          if (damage['photos'] != null && damage['photos'] is List<String>) {
-              for (var url in damage['photos'] as List<String>) {
-                  try {
-                      final imageBytes = await _downloadImage(url);
-                      damageImages.add(pw.MemoryImage(imageBytes));
-                  } catch (e) {
-                      print('Erro ao baixar imagem do dano: $e');
-                  }
-              }
+      final Map<String, List<pw.MemoryImage>> damageImagesMap = {};
+      for (var damage in damagesData) {
+        final List<pw.MemoryImage> damageImages = [];
+        if (damage['photos'] != null && damage['photos'] is List<String>) {
+          for (var url in damage['photos'] as List<String>) {
+            try {
+              final imageBytes = await _downloadImage(url);
+              damageImages.add(pw.MemoryImage(imageBytes));
+            } catch (e) {
+              print('Erro ao baixar imagem do dano: $e');
+            }
           }
-          damageImagesMap[damage['description']] = damageImages;
+        }
+        damageImagesMap[damage['description'] ?? 'Sem descrição'] = damageImages;
       }
-
 
       pdf.addPage(
         pw.MultiPage(
@@ -191,11 +168,13 @@ class PdfGenerator {
 
               // Fotos
               if (photoPlaqueta != null)
-              _buildPhotoSection('Foto da Plaqueta', [photoPlaqueta.path], [pw.MemoryImage(photoPlaqueta.readAsBytesSync())]),
-              _buildPhotoSection('Fotos da Carga', photosCarga.map((file) => file.path).toList(), photosCarga.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
-              _buildPhotoSection('Fotos da Amarração', photosAmarracao.map((file) => file.path).toList(), photosAmarracao.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
-              _buildPhotoSection('Fotos da Acomodação', photosAcomodacao.map((file) => file.path).toList(), photosAcomodacao.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
-              _buildPhotoSection('Fotos do Calçamento', photosCalcamento.map((file) => file.path).toList(), photosCalcamento.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
+              _buildPhotoSection('Foto da Plaqueta', [pw.MemoryImage(photoPlaqueta.readAsBytesSync())]),
+              _buildPhotoSection('Fotos da Carga', photosCarga.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
+              _buildPhotoSection('Fotos da Amarração', photosAmarracao.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
+              _buildPhotoSection('Fotos da Acomodação', photosAcomodacao.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
+              _buildPhotoSection('Fotos do Calçamento', photosCalcamento.map((file) => pw.MemoryImage(file.readAsBytesSync())).toList()),
+
+
 
               // Dados da Aprovação
               pw.Text('Dados da Aprovação do Carregamento', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
@@ -222,8 +201,7 @@ class PdfGenerator {
                   children: damagesData.map((damage) {
                     final description = damage['description'] ?? 'Sem descrição';
                     final images = damageImagesMap[description] ?? [];
-
-                    return _buildPhotoSection('Dano: $description', [], images);
+                    return _buildPhotoSection('Dano: $description', images);
                   }).toList(),
                 ),
 
