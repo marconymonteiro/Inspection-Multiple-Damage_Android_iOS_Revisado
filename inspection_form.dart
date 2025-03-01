@@ -43,7 +43,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
   String _hasDamage = 'Selecione'; // Variável para controlar o estado de seleção da avaria
-  List<Map<String, Object>> _damages = []; // Lista que conterá mapas com tipos garantidos
+  List<Map<String, dynamic>> _damages = []; // Lista que conterá mapas com tipos garantidos
   Map<String, Object>? convertedMap; // Inicialize como nulo, será usado após a conversão
   String _damageDescription = ''; // Descrição da avaria
   List<File> _damagePhotos = []; // Lista de fotos relacionadas a avarias
@@ -71,22 +71,28 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
 
   Future<String?> uploadImage(File imageFile, String folder) async {
   try {
-    // Nome do arquivo único
-    String fileName = DateTime.now().millisecondsSinceEpoch.toString();
-    
+    // Gera um hash único para o arquivo
+    final bytes = await imageFile.readAsBytes();
+    final fileHash = md5.convert(bytes).toString();
+    final fileName = '$fileHash.jpg';
+
     // Caminho no Storage
-    Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName.jpg');
+    Reference ref = FirebaseStorage.instance.ref().child('$folder/$fileName');
 
-    // Upload da imagem
-    UploadTask uploadTask = ref.putFile(imageFile);
-    TaskSnapshot snapshot = await uploadTask;
-
-    // Retorna a URL da imagem no Firebase Storage
-    return await snapshot.ref.getDownloadURL();
-  } catch (e) {
-    print("Erro ao enviar imagem: $e");
-    return null;
-  }
+    // Verifica se o arquivo já existe
+    try {
+      final metadata = await ref.getMetadata();
+      return await ref.getDownloadURL(); // Retorna a URL existente
+    } catch (e) {
+      // Se o arquivo não existir, faz o upload
+      UploadTask uploadTask = ref.putFile(imageFile);
+      TaskSnapshot snapshot = await uploadTask;
+      return await snapshot.ref.getDownloadURL();
+    }
+    } catch (e) {
+      print("Erro ao enviar imagem: $e");
+      return null;
+    }
   }
 
     // Função auxiliar para evitar upload duplicado de imagens
@@ -173,7 +179,6 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
           setState(() {
             _hasDamage = data['hasDamage'] ?? 'Selecione';
             _selectedDate = data['selectedDate'] != null ? DateTime.parse(data['selectedDate']) : null;
-
             _photosAcomodacao = (data['photosAcomodacao'] as List?)?.map((url) => File(url)).toList() ?? [];
             _photosCalcamento = (data['photosCalcamento'] as List?)?.map((url) => File(url)).toList() ?? [];
             _photosAmarracao = (data['photosAmarracao'] as List?)?.map((url) => File(url)).toList() ?? [];
@@ -204,12 +209,13 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       final firestore = FirebaseFirestore.instance;
       final formRef = firestore.collection('inspection').doc(widget.formId);
 
-      // Carrega os dados existentes do formulário
-      final docSnapshot = await formRef.get();
-      Map<String, dynamic> existingData = {};
-      if (docSnapshot.exists) {
-        existingData = docSnapshot.data() as Map<String, dynamic>;
-      }
+
+    // Carrega os dados existentes do formulário
+    final docSnapshot = await formRef.get();
+    Map<String, dynamic> existingData = {};
+    if (docSnapshot.exists) {
+      existingData = docSnapshot.data() as Map<String, dynamic>;
+    }
 
       // Calcula o número total de tarefas
       int totalTasks = 1 + // Para a foto da plaqueta
@@ -280,6 +286,25 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
           return url ?? "";
         }),
       );
+
+      // Upload das imagens de avarias
+      List<Map<String, dynamic>> damagesData = [];
+      for (var damage in _damages) {
+        List<String> photoUrls = [];
+
+        // Verifica se 'photos' existe e é uma lista de URLs
+        if (damage['photos'] != null && damage['photos'] is List<String>) {
+          if (damage['photos'] is List) {
+              photoUrls = List<String>.from(damage['photos'] as List);
+            }
+        }
+
+        // Adiciona a avaria com as URLs das fotos
+        damagesData.add({
+          'description': damage['description'],
+          'photos': photoUrls,
+        });
+      }
 
       // Preparar os dados para salvar no Firestore
       final Map<String, dynamic> formData = {
@@ -359,38 +384,44 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     }
   }
 
-  void _saveDamage() {
-  if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
-    try {
-      // Criamos o mapa dinâmico inicialmente
-      Map<String, dynamic> dynamicMap = {
-        'description': _damageDescription.trim(),
-        'photos': List<File>.from(_damagePhotos),
-      };
+  void _saveDamage() async {
+    if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
+      try {
+        // Upload das fotos para o Firebase Storage
+        List<String> photoUrls = [];
+        for (File photo in _damagePhotos) {
+          String? url = await uploadImage(photo, "danos");
+          if (url != null) {
+            photoUrls.add(url);
+          }
+        }
 
-      // Convertendo o mapa dinâmico para garantir o tipo correto
-      Map<String, Object> convertedMap = Map<String, Object>.from(dynamicMap);
+        // Criamos o mapa dinâmico inicialmente
+        Map<String, dynamic> dynamicMap = {
+          'description': _damageDescription.trim(),
+          'photos': photoUrls, // Salva as URLs das fotos
+        };
 
-      setState(() {
-        _damages.add(convertedMap); // Adicionamos o mapa convertido à lista
-        _damageDescription = ''; // Limpa a descrição
-        _damagePhotos.clear(); // Limpa a lista de fotos
-      });
+        setState(() {
+          _damages.add(dynamicMap); // Altere o tipo aqui
+          _damageDescription = ''; // Limpa a descrição
+          _damagePhotos.clear(); // Limpa a lista de fotos
+        });
 
-      print('Avaria salva com sucesso: $convertedMap');
-    } catch (e) {
-      print('Erro ao salvar avaria: $e');
+        print('Avaria salva com sucesso: $dynamicMap');
+      } catch (e) {
+        print('Erro ao salvar avaria: $e');
+      }
+      } else {
+        print('Nenhuma avaria foi fornecida para salvar.');
+      }
     }
-  } else {
-    print('Nenhuma avaria foi fornecida para salvar.');
-  }
-}
 
   void _editDamage(int index) {
   final damage = _damages[index];
   setState(() {
     _damageDescription = damage['description'] as String; // Casting explícito para String
-    _damagePhotos = List<File>.from(damage['photos'] as List); // Casting para List
+    _damagePhotos = []; // Casting para List
     _damages.removeAt(index);
   });
 }
@@ -659,22 +690,42 @@ Future<void> _pickPlaquetaPhoto() async {
   }
 
   // Método para exibir a imagem em tamanho completo (reutilizado para todos os campos)
-  void _showFullImage(File photo) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.file(photo),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fechar'),
-            ),
-          ],
+  void _showFullImage(dynamic image) {
+    if (image is File) {
+      // Exibe uma imagem local (File)
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.file(image),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Fechar'),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    } else if (image is String) {
+      // Exibe uma imagem remota (URL)
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.network(image),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Fechar'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _submitForm() async {
@@ -682,7 +733,7 @@ Future<void> _pickPlaquetaPhoto() async {
 
     final pdfFile = await PdfGenerator().generatePdf(
       //formId: widget.formId, // Adicione o formId aqui
-      name: _controllers['name']!.text,
+       name: _controllers['name']!.text,
       cpfResp: _controllers['cpfResp']!.text,
       serialNumber: _controllers['serialNumber']!.text,
       invoiceNumber: _controllers['invoiceNumber']!.text,
@@ -694,21 +745,20 @@ Future<void> _pickPlaquetaPhoto() async {
       nameResp: _controllers['nameResp']!.text,
       invoiceQtty: _controllers['invoiceQtty']!.text,
       invoiceItems: _controllers['invoiceItems']!.text,
-
       reportDate: _selectedDate != null
-          ? DateFormat('dd/mm/yyyy', 'pt_BR').format(_selectedDate!)
+          ? DateFormat('dd/MM/yyyy', 'pt_BR').format(_selectedDate!)
           : 'Data não selecionada',
       hasDamage: _hasDamage == 'Sim',
       damageDescription: _controllers['damageDescription']!.text,
       photosCarga: _photosCarga,
-
       photosAcomodacao: _photosAcomodacao,
-      photosAmarracao: _photosAmarracao,
       photosCalcamento: _photosCalcamento,
-      photosDamage: _photosDamage,
-      damagesData: _damages, //incluído para teste de emissão de PDF
+      photosAmarracao: _photosAmarracao,
+      damagesData: _damages, // Passa as fotos dos danos aqui
       photoPlaqueta: _photoPlaqueta,
       signatureImage: _signatureImage,
+      
+      //photosDamage: _photosDamage,
     );
 
     await ShareExtend.share(pdfFile.path, 'application/pdf');
@@ -930,21 +980,16 @@ Widget build(BuildContext context) {
                           subtitle: Wrap(
                             spacing: 8,
                             runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-                              children: (damage['photos'] != null ? damage['photos'] as List<File> : []).map<Widget>((photo) {
-                              return GestureDetector(
-                                onTap: () => _showPhoto(photo, onDelete: () {
-                                  setState(() {
-                                      if (damage['photos'] != null && damage['photos'] is List<File>) {
-                                      (damage['photos'] as List<File>).remove(photo);
-                                    }                                                                    });
-                                }),
-                                child: Image.file(
-                                  photo,
-                                  height: 60,
-                                  width: 60,
-                                  fit: BoxFit.cover,
-                                ),
-                              );
+                              children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
+                                return GestureDetector(
+                                  onTap: () => _showFullImage(url),
+                                  child: Image.network(
+                                    url,
+                                    height: 60,
+                                    width: 60,
+                                    fit: BoxFit.cover,
+                                  ),
+                                );
                             }).toList(),
                           ),
                           trailing: Row(
