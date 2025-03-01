@@ -2,13 +2,25 @@ import 'package:flutter/material.dart';
 import 'inspection_form.dart'; // Importa a tela de novo formulário
 import 'saved_forms.dart';    // Importa a tela de formulários salvos
 import 'package:uuid/uuid.dart';
+import 'local_storage.dart'; // Importa o arquivo onde você implementou checkAndSendPendingForms()
 
 String generateUniqueFormId() {
   var uuid = Uuid();
   return uuid.v4();
+}
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    checkAndSendPendingForms(); // Verifica e envia formulários pendentes ao iniciar
   }
 
-class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -32,7 +44,7 @@ class HomeScreen extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                  builder: (context) => FormularioInspecao(formId: generateUniqueFormId()),
+                    builder: (context) => FormularioInspecao(formId: generateUniqueFormId()),
                   ),
                 );
               },
