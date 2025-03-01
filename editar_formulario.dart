@@ -90,23 +90,15 @@ class _EditarFormularioState extends State<EditarFormulario> {
           _controllers['nameResp']?.text = formData?['nameResp'] ?? '';
           _controllers['invoiceQtty']?.text = formData?['invoiceQtty'] ?? '';
           _controllers['invoiceItems']?.text = formData?['invoiceItems'] ?? '';
-
           _controllers['damageDescription']?.text = formData?['damageDescription'] ?? '';
-
           _selectedDate = formData?['selectedDate'] != null
               ? DateTime.parse(formData!['selectedDate'])
               : null;
 
-          _damages = (formData?['damages'] as List<dynamic>?)
-            ?.map((damage) => {
-                  'description': damage['description'] ?? 'Sem descrição',
-                  'photos': (damage['photos'] as List<dynamic>?)
-                      ?.map((url) => url.toString()) // Mantenha as URLs como strings
-                      .toList() ??
-                      [],
-                })
-            .toList() ??
-            [];
+          _damages = List<Map<String, dynamic>>.from(formData?['damages'] ?? []);
+
+          _hasDamage = _damages.isNotEmpty ? 'Sim' : 'Não';
+          print('Dados dos danos carregados: $_damages');
 
         });
         await _loadPhotos();
@@ -141,7 +133,6 @@ class _EditarFormularioState extends State<EditarFormulario> {
     if (formData?['signatureImage'] != null && formData!['signatureImage'].isNotEmpty) {
       _signatureImage = await _urlToFile(formData!['signatureImage']);
     }
-
   }
 
   // Exibe uma imagem com base no URL
@@ -278,7 +269,9 @@ class _EditarFormularioState extends State<EditarFormulario> {
     }
 
     try {
-      // Gera o PDF
+        print('Dados dos danos antes de gerar o PDF: $_damages');
+
+    // Gera o PDF
     final pdfFile = await PdfGenerator().generatePdf(
     name: _controllers['name']!.text,
     cpfResp: _controllers['cpfResp']!.text,
@@ -301,21 +294,9 @@ class _EditarFormularioState extends State<EditarFormulario> {
     photosAcomodacao: _photosAcomodacao,
     photosCalcamento: _photosCalcamento,
     photosAmarracao: _photosAmarracao,
-    //damagesData: _damages, // Passa as fotos dos danos aqui
+    damagesData: _damages, // Passa as fotos dos danos aqui
     photoPlaqueta: _photoPlaqueta,
     signatureImage: _signatureImage,
-    
-    damagesData: (formData!['damages'] as List<dynamic>?)
-      ?.map((damage) => {
-            'description': damage['description'] ?? 'Sem descrição',
-            'photos': (damage['photos'] as List<dynamic>?)
-                ?.map((url) => url.toString()) // Mantém os URLs como strings
-                .toList() ??
-                [],
-          })
-      .toList() ??
-      [],
-
     );
 
       // Compartilha o PDF
