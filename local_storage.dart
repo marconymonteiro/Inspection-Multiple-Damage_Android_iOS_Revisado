@@ -38,7 +38,6 @@ Future<void> checkAndSendPendingForms() async {
   final prefs = await SharedPreferences.getInstance();
   List<String> savedForms = prefs.getStringList('pending_forms') ?? [];
 
-  // Verifica se há conexão com a internet
   var connectivityResult = await Connectivity().checkConnectivity();
   if (connectivityResult == ConnectivityResult.none) {
     print('Sem conexão com a internet. Tentará novamente mais tarde.');
@@ -50,93 +49,120 @@ Future<void> checkAndSendPendingForms() async {
 
     for (String form in savedForms) {
       try {
-        // Decodifica o formulário salvo
         Map<String, dynamic> formData = jsonDecode(form);
         String formId = formData['formId'] ?? DateTime.now().millisecondsSinceEpoch.toString();
 
-        // Processa as fotos
-        List<dynamic> photosAcomodacao = formData['photosAcomodacao'] ?? [];
-        List<dynamic> photosCalcamento = formData['photosCalcamento'] ?? [];
-        List<dynamic> photosAmarracao = formData['photosAmarracao'] ?? [];
-        String? photoPlaquetaPath = formData['photoPlaqueta'];
-        String? signatureImagePath = formData['signatureImage'];
+        // Upload de fotos
+        List<String> uploadedPhotosAcomodacao = await uploadPhotos(formData['photosAcomodacao'], "acomodacao");
+        List<String> uploadedPhotosCalcamento = await uploadPhotos(formData['photosCalcamento'], "calcamento");
+        List<String> uploadedPhotosAmarracao = await uploadPhotos(formData['photosAmarracao'], "amarracao");
 
-        List<String> uploadedPhotosAcomodacao = [];
-        List<String> uploadedPhotosCalcamento = [];
-        List<String> uploadedPhotosAmarracao = [];
-        String? uploadedPhotoPlaqueta;
-        String? uploadedSignatureImage;
-
-        // Faz o upload das fotos de acomodação
-        for (var path in photosAcomodacao) {
-          File file = File(path);
-          String? url = await uploadImage(file, "acomodacao");
-          if (url != null) uploadedPhotosAcomodacao.add(url);
-        }
-
-        // Faz o upload das fotos de calcamento
-        for (var path in photosCalcamento) {
-          File file = File(path);
-          String? url = await uploadImage(file, "calcamento");
-          if (url != null) uploadedPhotosCalcamento.add(url);
-        }
-
-        // Faz o upload das fotos de amarração
-        for (var path in photosAmarracao) {
-          File file = File(path);
-          String? url = await uploadImage(file, "amarracao");
-          if (url != null) uploadedPhotosAmarracao.add(url);
-        }
-
-        // Faz o upload da foto da plaqueta
-        if (photoPlaquetaPath != null) {
-          File file = File(photoPlaquetaPath);
-          uploadedPhotoPlaqueta = await uploadImage(file, "plaquetas");
-        }
-
-        // Faz o upload da assinatura
-        if (signatureImagePath != null) {
-          File file = File(signatureImagePath);
-          uploadedSignatureImage = await uploadImage(file, "assinaturas");
-        }
-
-        // Atualiza os dados do formulário com as URLs das fotos
         formData['photosAcomodacao'] = uploadedPhotosAcomodacao;
         formData['photosCalcamento'] = uploadedPhotosCalcamento;
         formData['photosAmarracao'] = uploadedPhotosAmarracao;
-        formData['photoPlaqueta'] = uploadedPhotoPlaqueta;
-        formData['signatureImage'] = uploadedSignatureImage;
 
-        // Processa os danos
-        List<dynamic> damages = formData['damages'] ?? [];
-        for (var damage in damages) {
-          List<dynamic> photos = damage['photos'];
-          List<String> uploadedUrls = [];
-          for (var photoPath in photos) {
-            File photoFile = File(photoPath);
-            String? url = await uploadImage(photoFile, "danos");
-            if (url != null) {
-              uploadedUrls.add(url);
-            }
-          }
-          // Atualiza os danos com as URLs
-          damage['photos'] = uploadedUrls;
+        if (formData['photoPlaqueta'] != null) {
+          formData['photoPlaqueta'] = await uploadImage(File(formData['photoPlaqueta']), "plaquetas");
+        }
+        if (formData['signatureImage'] != null) {
+          formData['signatureImage'] = await uploadImage(File(formData['signatureImage']), "assinaturas");
         }
 
-        // Atualiza os dados do formulário
+        // Upload de fotos de danos
+        List<dynamic> damages = formData['damages'] ?? [];
+        for (var damage in damages) {
+          damage['photos'] = await uploadPhotos(damage['photos'], "danos");
+        }
         formData['damages'] = damages;
 
-        // Salva no Firestore
-        await FirebaseFirestore.instance.collection('inspection').doc();
+        // Envio para o Firestore
+        await firestore.collection('inspection').doc(formId).set(formData);
         print('Formulário enviado para o Firestore: $formId');
+
       } catch (e) {
         print('Erro ao enviar formulário para o Firestore: $e');
         return;
       }
     }
 
-    // Após enviar todos os formulários, limpar os dados locais
     await prefs.remove('pending_forms');
     print('Todos os formulários pendentes foram enviados e removidos localmente.');
+  }
+}
+
+Future<List<String>> uploadPhotos(List<dynamic>? photos, String folder) async {
+  if (photos == null || photos.isEmpty) return [];
+
+  List<String> uploadedUrls = [];
+  for (var path in photos) {
+    if (path is String && File(path).existsSync()) {
+      String? url = await uploadImage(File(path), folder);
+      if (url != null) uploadedUrls.add(url);
+    } else {
+      print('Arquivo não encontrado: $path');
+    }
+  }
+  return uploadedUrls;
+}
+
+Future<void> syncPendingDamages() async {
+  
+  var connectivityResult = await Connectivity().checkConnectivity();
+  if (connectivityResult == ConnectivityResult.none) {
+    print('Sem conexão com a internet. Tentará novamente mais tarde.');
+    return;
+  }
+  
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> savedDamages = prefs.getStringList('pending_damages') ?? [];
+
+    if (savedDamages.isEmpty) return;
+
+    bool hasInternet = false;
+    try {
+      final result = await InternetAddress.lookup('example.com');
+      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+        hasInternet = true;
+      }
+    } on SocketException catch (_) {
+      hasInternet = false;
+    }
+
+    if (!hasInternet) return;
+
+    List<String> remainingDamages = [];
+
+    for (String damageJson in savedDamages) {
+      Map<String, dynamic> damageData = jsonDecode(damageJson);
+      
+      List<String> updatedPhotoUrls = [];
+      for (String localPath in damageData['photos']) {
+        if (!localPath.startsWith('http')) { // Se for um caminho local, faz upload
+          String? url = await uploadImage(File(localPath), "danos");
+          if (url != null) {
+            updatedPhotoUrls.add(url);
+          }
+        } else {
+          updatedPhotoUrls.add(localPath);
+        }
+      }
+
+      damageData['photos'] = updatedPhotoUrls;
+
+      await FirebaseFirestore.instance
+          .collection('inspection')
+          .doc(damageData['formId'])
+          .collection('damages')
+          .add(damageData);
+
+      print('Avaria sincronizada no Firestore.');
+    }
+
+    await prefs.setStringList('pending_damages', remainingDamages);
+    print('Todas as avarias pendentes foram sincronizadas.');
+
+  } catch (e) {
+    print('Erro ao sincronizar avarias pendentes: $e');
   }
 }
