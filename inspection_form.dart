@@ -1,3 +1,7 @@
+// ignore_for_file: unused_local_variable
+
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,8 +15,10 @@ import 'package:signature/signature.dart'; // Pacote para captura de assinatura
 import 'package:cloud_firestore/cloud_firestore.dart'; // Importe o pacote do Firestore
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:crypto/crypto.dart';
-import 'dart:convert';
+//import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'local_storage.dart'; // Importa o arquivo onde você implementou checkAndSendPendingForms()
+
 
 class FormularioInspecao extends StatefulWidget {
   final String formId; // ID do formulário a ser editado
@@ -39,6 +45,9 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     'invoiceItems': TextEditingController(), // Novo controlador para o campo "Quantidade Partes e Peças"
   };
 
+  late StreamSubscription<ConnectivityResult> _connectivitySubscription;
+  bool _isConnected = true; // Assumimos que começa online
+
   // String _currentDate = DateFormat('dd/MM/yyyy').format(DateTime.now());
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
@@ -58,9 +67,12 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     penColor: Colors.black,
     exportBackgroundColor: Colors.white,
   );
-    // Variável para controlar o progresso
+  // Variável para controlar o progresso
   double _progress = 0.0;
   bool _isLoading = false;
+
+  // Serializar avarias
+  int? _editingIndex;
 
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
@@ -129,68 +141,95 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   }
   }
 
-  // Salva o formulário localmente até que seja estabelecida a conexão
-  Future<void> saveFormLocally(Map<String, dynamic> formData) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> pendingForms = prefs.getStringList('pendingForms') ?? [];
-
-    // Adiciona novo formulário na lista de pendentes
-    pendingForms.add(jsonEncode(formData));
-    await prefs.setStringList('pendingForms', pendingForms);
-  }
-
-  Future<void> checkAndSendPendingForms() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> pendingForms = prefs.getStringList('pendingForms') ?? [];
-
-    if (pendingForms.isEmpty) return;
-
+  Future<void> _loadForm() async {
+  try {
+    // Verifica a conectividade
     var connectivityResult = await Connectivity().checkConnectivity();
     bool hasInternet = connectivityResult != ConnectivityResult.none;
 
     if (hasInternet) {
+      // Tenta carregar os dados do Firestore
       final firestore = FirebaseFirestore.instance;
+      final formRef = firestore.collection('inspection').doc(widget.formId);
 
-      for (String formJson in pendingForms) {
-        Map<String, dynamic> formData = jsonDecode(formJson);
+      final docSnapshot = await formRef.get();
+      if (docSnapshot.exists) {
+        final data = docSnapshot.data() as Map<String, dynamic>;
 
-        // Gera um novo ID para cada formulário enviado
-        String formId = firestore.collection('inspection').doc().id;
+        setState(() {
+          _hasDamage = data['hasDamage'] ?? 'Selecione';
+          _selectedDate = data['selectedDate'] != null ? DateTime.parse(data['selectedDate']) : null;
+          _photosAcomodacao = (data['photosAcomodacao'] as List?)?.map((url) => File(url)).toList() ?? [];
+          _photosCalcamento = (data['photosCalcamento'] as List?)?.map((url) => File(url)).toList() ?? [];
+          _photosAmarracao = (data['photosAmarracao'] as List?)?.map((url) => File(url)).toList() ?? [];
+          _photoPlaqueta = data['photoPlaqueta'] != null ? File(data['photoPlaqueta']) : null;
+          _signatureImage = data['signatureImage'] != null ? File(data['signatureImage']) : null;
+        });
 
-        await firestore.collection('inspection').doc(formId).set(formData);
+        // Salva os dados localmente para uso offline
+        await saveFormLocally(data);
+        return; // Sai do método após carregar os dados do Firestore
       }
+    }
 
-      // Limpa os formulários pendentes depois de enviar
-      await prefs.remove('pendingForms');
-
-      print("Todos os formulários pendentes foram enviados!");
+    // Carrega os dados localmente se estiver offline ou se o formulário não existir no Firestore
+    final localData = await _loadFormLocally();
+    if (localData != null) {
+      setState(() {
+        _hasDamage = localData['hasDamage'] ?? 'Selecione';
+        _selectedDate = localData['selectedDate'] != null ? DateTime.parse(localData['selectedDate']) : null;
+        _photosAcomodacao = (localData['photosAcomodacao'] as List?)?.map((url) => File(url)).toList() ?? [];
+        _photosCalcamento = (localData['photosCalcamento'] as List?)?.map((url) => File(url)).toList() ?? [];
+        _photosAmarracao = (localData['photosAmarracao'] as List?)?.map((url) => File(url)).toList() ?? [];
+        _photoPlaqueta = localData['photoPlaqueta'] != null ? File(localData['photoPlaqueta']) : null;
+        _signatureImage = localData['signatureImage'] != null ? File(localData['signatureImage']) : null;
+      });
+    } else {
+      // Exibe um snackbar informando que nenhum dado foi encontrado
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nenhum dado encontrado localmente.')),
+      );
+    }
+    } catch (e) {
+      // Exibe um snackbar em caso de erro
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro ao carregar dados. Verifique sua conexão.')),
+      );
+      print('Erro ao carregar dados: $e');
     }
   }
 
-  Future<void> _loadForm() async {
-      try {
-        final firestore = FirebaseFirestore.instance;
-        final formRef = firestore.collection('inspection').doc(widget.formId);
+  Future<Map<String, dynamic>?> _loadFormLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final formDataJson = prefs.getString('formData_${widget.formId}');
+      if (formDataJson != null) {
+        return jsonDecode(formDataJson) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      print('Erro ao carregar dados localmente: $e');
+    }
+    return null;
+  }
 
-        final docSnapshot = await formRef.get();
-        if (docSnapshot.exists) {
-          final data = docSnapshot.data() as Map<String, dynamic>;
+  Future<void> saveFormLocally(Map<String, dynamic> formData) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      List<String> savedForms = prefs.getStringList('pending_forms') ?? [];
+      print('Formulários salvos anteriormente: $savedForms');
 
-          setState(() {
-            _hasDamage = data['hasDamage'] ?? 'Selecione';
-            _selectedDate = data['selectedDate'] != null ? DateTime.parse(data['selectedDate']) : null;
-            _photosAcomodacao = (data['photosAcomodacao'] as List?)?.map((url) => File(url)).toList() ?? [];
-            _photosCalcamento = (data['photosCalcamento'] as List?)?.map((url) => File(url)).toList() ?? [];
-            _photosAmarracao = (data['photosAmarracao'] as List?)?.map((url) => File(url)).toList() ?? [];
-            _photoPlaqueta = data['photoPlaqueta'] != null ? File(data['photoPlaqueta']) : null;
-            _signatureImage = data['signatureImage'] != null ? File(data['signatureImage']) : null;
-          });
-        }
+      // Serializa os dados do formulário
+      String formDataJson = jsonEncode(formData);
+      savedForms.removeWhere((form) => jsonDecode(form)['formId'] == formData['formId']);
+      // Adiciona o novo formulário à lista
+      savedForms.add(formDataJson);
+
+      // Salva a lista atualizada no SharedPreferences
+      await prefs.setStringList('pending_forms', savedForms);
+      print('Formulário salvo localmente com sucesso.');
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erro ao carregar dados do Firestore.')),
-        );
-        print('Erro ao carregar dados do Firestore: $e');
+        print('Erro ao salvar formulário localmente: $e');
+        rethrow; // Relança o erro para ser capturado no formulário
       }
     }
 
@@ -200,113 +239,11 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
-      _isLoading = true; // Ativa o estado de carregamento
-      _progress = 0.0; // Reseta o progresso
+      _isLoading = true;
+      _progress = 0.0;
     });
 
     try {
-      // Referência ao Firestore
-      final firestore = FirebaseFirestore.instance;
-      final formRef = firestore.collection('inspection').doc(widget.formId);
-
-
-    // Carrega os dados existentes do formulário
-    final docSnapshot = await formRef.get();
-    Map<String, dynamic> existingData = {};
-    if (docSnapshot.exists) {
-      existingData = docSnapshot.data() as Map<String, dynamic>;
-    }
-
-      // Calcula o número total de tarefas
-      int totalTasks = 1 + // Para a foto da plaqueta
-          1 + // Para a assinatura
-          _photosAcomodacao.length +
-          _photosCalcamento.length +
-          _photosAmarracao.length;
-
-      int completedTasks = 0;
-
-      // Função para atualizar o progresso global
-      void updateProgress() {
-        setState(() {
-          _progress = completedTasks / totalTasks;
-        });
-      }
-
-      // Upload da foto da plaqueta
-      String? photoPlaquetaUrl = await _uploadFile(
-        _photoPlaqueta,
-        "plaquetas",
-        existingData['photoPlaqueta'],
-      );
-      completedTasks++;
-      updateProgress();
-
-      // Upload da assinatura
-      String? signatureImageUrl = await _uploadFile(
-        _signatureImage,
-        "assinaturas",
-        existingData['signatureImage'],
-      );
-      completedTasks++;
-      updateProgress();
-
-      // Upload das fotos de acomodação
-      List<String> photosAcomodacaoUrls = await Future.wait(
-        _photosAcomodacao.asMap().entries.map((entry) async {
-          int index = entry.key;
-          File file = entry.value;
-          String? url = await _uploadFile(file, "acomodacao", existingData['photosAcomodacao']?[index]);
-          completedTasks++;
-          updateProgress();
-          return url ?? "";
-        }),
-      );
-
-      // Upload das fotos de calcamento
-      List<String> photosCalcamentoUrls = await Future.wait(
-        _photosCalcamento.asMap().entries.map((entry) async {
-          int index = entry.key;
-          File file = entry.value;
-          String? url = await _uploadFile(file, "calcamento", existingData['photosCalcamento']?[index]);
-          completedTasks++;
-          updateProgress();
-          return url ?? "";
-        }),
-      );
-
-      // Upload das fotos de amarração
-      List<String> photosAmarracaoUrls = await Future.wait(
-        _photosAmarracao.asMap().entries.map((entry) async {
-          int index = entry.key;
-          File file = entry.value;
-          String? url = await _uploadFile(file, "amarracao", existingData['photosAmarracao']?[index]);
-          completedTasks++;
-          updateProgress();
-          return url ?? "";
-        }),
-      );
-
-      // Upload das imagens de avarias
-      List<Map<String, dynamic>> damagesData = [];
-      for (var damage in _damages) {
-        List<String> photoUrls = [];
-
-        // Verifica se 'photos' existe e é uma lista de URLs
-        if (damage['photos'] != null && damage['photos'] is List<String>) {
-          if (damage['photos'] is List) {
-              photoUrls = List<String>.from(damage['photos'] as List);
-            }
-        }
-
-        // Adiciona a avaria com as URLs das fotos
-        damagesData.add({
-          'description': damage['description'],
-          'photos': photoUrls,
-        });
-      }
-
-      // Preparar os dados para salvar no Firestore
       final Map<String, dynamic> formData = {
         'name': _controllers['name']!.text,
         'cpfResp': _controllers['cpfResp']!.text,
@@ -323,28 +260,102 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
         'selectedDate': _selectedDate?.toIso8601String(),
         'hasDamage': _hasDamage,
         'damages': _damages,
-        'photosAcomodacao': photosAcomodacaoUrls,
-        'photosCalcamento': photosCalcamentoUrls,
-        'photosAmarracao': photosAmarracaoUrls,
-        'photoPlaqueta': photoPlaquetaUrl,
-        'signatureImage': signatureImageUrl,
+        'photosAcomodacao': _photosAcomodacao.map((file) => file.path).toList(),
+        'photosCalcamento': _photosCalcamento.map((file) => file.path).toList(),
+        'photosAmarracao': _photosAmarracao.map((file) => file.path).toList(),
+        'photoPlaqueta': _photoPlaqueta?.path,
+        'signatureImage': _signatureImage?.path,
       };
 
-      // Salvar no Firestore
-      await formRef.set(formData, SetOptions(merge: true));
+      bool hasInternet = false;
+      try {
+        final result = await InternetAddress.lookup('example.com');
+        if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+          hasInternet = true;
+        }
+      } on SocketException catch (_) {
+        hasInternet = false;
+      }
 
-      // Feedback ao usuário
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Formulário salvo no Firestore!')),
-      );
+      if (hasInternet) {
+        final formRef = FirebaseFirestore.instance.collection('inspection').doc(widget.formId);
+
+        List<File> allPhotos = [..._photosAcomodacao, ..._photosCalcamento, ..._photosAmarracao];
+        int totalTasks = 2 + allPhotos.length; // 2 para assinatura e plaqueta
+        int completedTasks = 0;
+
+        void updateProgress() {
+          setState(() {
+            _progress = (completedTasks / totalTasks).clamp(0.0, 1.0);
+          });
+        }
+
+        Future<String?> safeUpload(File? file, String folder) async {
+          if (file == null) return null;
+          try {
+            String? url = await _uploadFile(file, folder, null);
+            completedTasks++;
+            updateProgress();
+            return url;
+          } catch (e) {
+            print('Erro no upload de $folder: $e');
+            return null;
+          }
+        }
+
+        String? photoPlaquetaUrl = await safeUpload(_photoPlaqueta, "plaquetas");
+        String? signatureImageUrl = await safeUpload(_signatureImage, "assinaturas");
+
+        Future<List<String>> uploadMultiple(List<File> files, String folder) async {
+          return await Future.wait(
+            files.map((file) => safeUpload(file, folder)).toList(),
+          ).then((urls) => urls.whereType<String>().toList()); // Remove nulos
+        }
+
+        List<String> photosAcomodacaoUrls = await uploadMultiple(_photosAcomodacao, "acomodacao");
+        List<String> photosCalcamentoUrls = await uploadMultiple(_photosCalcamento, "calcamento");
+        List<String> photosAmarracaoUrls = await uploadMultiple(_photosAmarracao, "amarracao");
+
+        // **Correção:** Atualizar `formData` antes de salvar no Firestore
+        formData['photosAcomodacao'] = photosAcomodacaoUrls;
+        formData['photosCalcamento'] = photosCalcamentoUrls;
+        formData['photosAmarracao'] = photosAmarracaoUrls;
+        formData['photoPlaqueta'] = photoPlaquetaUrl;
+        formData['signatureImage'] = signatureImageUrl;
+
+        bool allUploadsSucceeded = photoPlaquetaUrl != null &&
+                                  signatureImageUrl != null &&
+                                  photosAcomodacaoUrls.length == _photosAcomodacao.length &&
+                                  photosCalcamentoUrls.length == _photosCalcamento.length &&
+                                  photosAmarracaoUrls.length == _photosAmarracao.length;
+
+        if (!hasInternet || !allUploadsSucceeded) {
+          await saveFormLocally(formData);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Formulário salvo localmente.')),
+          );
+          return;
+        
+        // Continua para salvar no Firestore apenas se todos os uploads foram bem-sucedidos   
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Erro ao enviar imagens. Verifique sua conexão.')),
+          );
+        }
+      } else {
+        await saveFormLocally(formData);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Formulário salvo localmente.')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erro ao salvar no Firestore.')),
+        const SnackBar(content: Text('Erro ao salvar o formulário.')),
       );
-      print('Erro ao salvar no Firestore: $e');
+      print('Erro ao salvar o formulário: $e');
     } finally {
       setState(() {
-        _isLoading = false; // Desativa o estado de carregamento
+        _isLoading = false;
       });
     }
   }
@@ -384,47 +395,93 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     }
   }
 
-  void _saveDamage() async {
-    if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
+  Future<void> _saveDamage() async {
+    if (_damageDescription.trim().isEmpty && _damagePhotos.isEmpty) {
+      print('Nenhuma avaria foi fornecida para salvar.');
+      return;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      List<String> savedDamages = prefs.getStringList('pending_damages') ?? [];
+
+      bool hasInternet = false;
       try {
-        // Upload das fotos para o Firebase Storage
-        List<String> photoUrls = [];
+        final result = await InternetAddress.lookup('example.com');
+        if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+          hasInternet = true;
+        }
+      } on SocketException catch (_) {
+        hasInternet = false;
+      }
+
+      List<String> photoUrls = [];
+
+      if (hasInternet) {
         for (File photo in _damagePhotos) {
           String? url = await uploadImage(photo, "danos");
           if (url != null) {
             photoUrls.add(url);
           }
         }
-
-        // Criamos o mapa dinâmico inicialmente
-        Map<String, dynamic> dynamicMap = {
-          'description': _damageDescription.trim(),
-          'photos': photoUrls, // Salva as URLs das fotos
-        };
-
-        setState(() {
-          _damages.add(dynamicMap); // Altere o tipo aqui
-          _damageDescription = ''; // Limpa a descrição
-          _damagePhotos.clear(); // Limpa a lista de fotos
-        });
-
-        print('Avaria salva com sucesso: $dynamicMap');
-      } catch (e) {
-        print('Erro ao salvar avaria: $e');
-      }
       } else {
-        print('Nenhuma avaria foi fornecida para salvar.');
+        photoUrls = _damagePhotos.map((photo) => photo.path).toList();
       }
+
+      Map<String, dynamic> damageData = {
+        'formId': widget.formId,
+        'description': _damageDescription.trim(),
+        'photos': photoUrls,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      if (hasInternet) {
+        await FirebaseFirestore.instance
+            .collection('inspection')
+            .doc(widget.formId)
+            .collection('damages')
+            .add(damageData);
+      } else {
+        savedDamages.add(jsonEncode(damageData));
+        await prefs.setStringList('pending_damages', savedDamages);
+      }
+
+      setState(() {
+        if (_editingIndex != null) {
+          _damages[_editingIndex!] = damageData;
+          _editingIndex = null;
+        } else {
+          _damages.add(damageData);
+        }
+        _damageDescription = '';
+        _damagePhotos.clear();
+      });
+
+    } catch (e) {
+      print('Erro ao salvar avaria: $e');
     }
+  }
 
   void _editDamage(int index) {
-  final damage = _damages[index];
-  setState(() {
-    _damageDescription = damage['description'] as String; // Casting explícito para String
-    _damagePhotos = []; // Casting para List
-    _damages.removeAt(index);
-  });
-}
+    final damage = _damages[index];
+
+    setState(() {
+      _damageDescription = damage['description'] as String;
+
+      List<String> photos = List<String>.from(damage['photos'] ?? []);
+
+      // Verifica se as imagens são URLs ou caminhos locais
+      _damagePhotos = photos.map((path) {
+        if (path.startsWith('http')) {
+          return File(''); // Deixe como um placeholder, se necessário
+        } else {
+          return File(path);
+        }
+      }).toList();
+
+      _editingIndex = index; // Armazena o índice para atualização futura
+    });
+  }
 
 void _showPhoto(File photo, {required VoidCallback onDelete}) {
   showDialog(
@@ -484,9 +541,25 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
   String reportDate = ""; // Variável para armazenar a data formatada.
 
   @override
-  void initState() {
-    super.initState();
-    _loadForm();
+void initState() {
+  super.initState();
+  checkAndSendPendingForms(); // Verifica e envia formulários pendentes ao iniciar
+  syncPendingDamages(); // Verifica e envia danos pendentes ao iniciar
+
+    // Carrega o formulário localmente apenas se houver dados salvos
+    _loadFormLocally().then((localData) {
+      if (localData != null) {
+        setState(() {
+          _hasDamage = localData['hasDamage'] ?? 'Selecione';
+          _selectedDate = localData['selectedDate'] != null ? DateTime.parse(localData['selectedDate']) : null;
+          _photosAcomodacao = (localData['photosAcomodacao'] as List?)?.map((path) => File(path)).toList() ?? [];
+          _photosCalcamento = (localData['photosCalcamento'] as List?)?.map((path) => File(path)).toList() ?? [];
+          _photosAmarracao = (localData['photosAmarracao'] as List?)?.map((path) => File(path)).toList() ?? [];
+          _photoPlaqueta = localData['photoPlaqueta'] != null ? File(localData['photoPlaqueta']) : null;
+          _signatureImage = localData['signatureImage'] != null ? File(localData['signatureImage']) : null;
+        });
+      }
+    });
   }
 
   Future<void> _pickDateTime() async {
@@ -974,21 +1047,35 @@ Widget build(BuildContext context) {
                     itemCount: _damages.length,
                     itemBuilder: (context, index) {
                       final damage = _damages[index];
+                      final List<String> photos = List<String>.from(damage['photos'] ?? []);
                       return Card(
                         child: ListTile(
                           title: Text(damage['description'] as String),
                           subtitle: Wrap(
                             spacing: 8,
                             runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-                              children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
+                              children: photos.map<Widget>((path) {
                                 return GestureDetector(
-                                  onTap: () => _showFullImage(url),
-                                  child: Image.network(
-                                    url,
-                                    height: 60,
-                                    width: 60,
-                                    fit: BoxFit.cover,
-                                  ),
+                                  onTap: () => _showFullImage(path),
+                                  child: path.startsWith('http')
+                                      ? Image.network(
+                                          path,
+                                          height: 60,
+                                          width: 60,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return const Icon(Icons.broken_image, size: 60, color: Colors.grey);
+                                          },
+                                        )
+                                      : Image.file(
+                                          File(path),
+                                          height: 60,
+                                          width: 60,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return const Icon(Icons.image_not_supported, size: 60, color: Colors.grey);
+                                          },
+                                        ),
                                 );
                             }).toList(),
                           ),
