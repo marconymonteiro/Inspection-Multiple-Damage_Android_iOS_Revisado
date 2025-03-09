@@ -496,7 +496,11 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
   @override
 void initState() {
   super.initState();
-  checkAndSendPendingForms(); // Verifica e envia formulários pendentes ao iniciar
+  checkAndSendPendingForms((progress) {
+      setState(() {
+        _syncProgress = progress;
+      });
+    });; // Verifica e envia formulários pendentes ao iniciar
 
     // Carrega o formulário localmente apenas se houver dados salvos
     _loadFormLocally().then((localData) {
