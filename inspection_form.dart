@@ -45,9 +45,6 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     'invoiceItems': TextEditingController(), // Novo controlador para o campo "Quantidade Partes e Peças"
   };
 
-  late StreamSubscription<ConnectivityResult> _connectivitySubscription;
-  bool _isConnected = true; // Assumimos que começa online
-
   // String _currentDate = DateFormat('dd/MM/yyyy').format(DateTime.now());
   DateTime? _selectedDate; // PARA NOVO PICKDATETIME
 
@@ -67,12 +64,11 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     penColor: Colors.black,
     exportBackgroundColor: Colors.white,
   );
-  // Variável para controlar o progresso
+    // Variável para controlar o progresso
   double _progress = 0.0;
   bool _isLoading = false;
 
-  // Serializar avarias
-  int? _editingIndex;
+  double _syncProgress = 0.0; // Progresso da sincronização
 
   String damageJsonDecode(String jsonString) {
   // Implementação para decodificar o JSON
@@ -105,6 +101,14 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       print("Erro ao enviar imagem: $e");
       return null;
     }
+  }
+
+  Future<bool> checkInternetConnection() async {
+      var connectivityResult = await Connectivity().checkConnectivity();
+      print('Resultado da conectividade: $connectivityResult'); // Log para depuração
+
+      return connectivityResult == ConnectivityResult.mobile ||
+          connectivityResult == ConnectivityResult.wifi;
   }
 
     // Função auxiliar para evitar upload duplicado de imagens
@@ -144,8 +148,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   Future<void> _loadForm() async {
   try {
     // Verifica a conectividade
-    var connectivityResult = await Connectivity().checkConnectivity();
-    bool hasInternet = connectivityResult != ConnectivityResult.none;
+    bool hasInternet = await checkInternetConnection();
 
     if (hasInternet) {
       // Tenta carregar os dados do Firestore
@@ -199,39 +202,35 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     }
   }
 
+  Future<void> saveFormLocally(Map<String, dynamic> formData) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!formData.containsKey('formId')) {
+      formData['formId'] = DateTime.now().millisecondsSinceEpoch.toString();
+    }
+    final formId = formData['formId'];
+    final formJson = jsonEncode(formData);
+    
+    // Adiciona o JSON do formulário à lista de pendentes
+    List<String> pendingForms = prefs.getStringList('pending_forms') ?? [];
+    pendingForms.add(formJson);
+    await prefs.setStringList('pending_forms', pendingForms);
+  }
+
   Future<Map<String, dynamic>?> _loadFormLocally() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final formDataJson = prefs.getString('formData_${widget.formId}');
-      if (formDataJson != null) {
-        return jsonDecode(formDataJson) as Map<String, dynamic>;
+      List<String> pendingForms = prefs.getStringList('pending_forms') ?? [];
+      for (String formJson in pendingForms) {
+        Map<String, dynamic> form = jsonDecode(formJson);
+        if (form['formId'] == widget.formId) {
+          return form;
+        }
       }
     } catch (e) {
       print('Erro ao carregar dados localmente: $e');
     }
     return null;
   }
-
-  Future<void> saveFormLocally(Map<String, dynamic> formData) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      List<String> savedForms = prefs.getStringList('pending_forms') ?? [];
-      print('Formulários salvos anteriormente: $savedForms');
-
-      // Serializa os dados do formulário
-      String formDataJson = jsonEncode(formData);
-      savedForms.removeWhere((form) => jsonDecode(form)['formId'] == formData['formId']);
-      // Adiciona o novo formulário à lista
-      savedForms.add(formDataJson);
-
-      // Salva a lista atualizada no SharedPreferences
-      await prefs.setStringList('pending_forms', savedForms);
-      print('Formulário salvo localmente com sucesso.');
-      } catch (e) {
-        print('Erro ao salvar formulário localmente: $e');
-        rethrow; // Relança o erro para ser capturado no formulário
-      }
-    }
 
   // Salvar as imagens no Firestore e salvar os links no firebase
 
@@ -245,6 +244,7 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
 
     try {
       final Map<String, dynamic> formData = {
+        'formId': widget.formId,
         'name': _controllers['name']!.text,
         'cpfResp': _controllers['cpfResp']!.text,
         'serialNumber': _controllers['serialNumber']!.text,
@@ -260,22 +260,15 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
         'selectedDate': _selectedDate?.toIso8601String(),
         'hasDamage': _hasDamage,
         'damages': _damages,
-        'photosAcomodacao': _photosAcomodacao.map((file) => file.path).toList(),
-        'photosCalcamento': _photosCalcamento.map((file) => file.path).toList(),
-        'photosAmarracao': _photosAmarracao.map((file) => file.path).toList(),
-        'photoPlaqueta': _photoPlaqueta?.path,
-        'signatureImage': _signatureImage?.path,
+        'photosAcomodacao': [],
+        'photosCalcamento': [],
+        'photosAmarracao': [],
+        'photoPlaqueta': null,
+        'signatureImage': null,
       };
 
-      bool hasInternet = false;
-      try {
-        final result = await InternetAddress.lookup('example.com');
-        if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-          hasInternet = true;
-        }
-      } on SocketException catch (_) {
-        hasInternet = false;
-      }
+      // Verifica conexão antes de continuar
+      bool hasInternet = await checkInternetConnection();
 
       if (hasInternet) {
         final formRef = FirebaseFirestore.instance.collection('inspection').doc(widget.formId);
@@ -303,49 +296,61 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
           }
         }
 
-        String? photoPlaquetaUrl = await safeUpload(_photoPlaqueta, "plaquetas");
-        String? signatureImageUrl = await safeUpload(_signatureImage, "assinaturas");
-
+        // Faz upload ou salva localmente
         Future<List<String>> uploadMultiple(List<File> files, String folder) async {
           return await Future.wait(
             files.map((file) => safeUpload(file, folder)).toList(),
           ).then((urls) => urls.whereType<String>().toList()); // Remove nulos
         }
 
-        List<String> photosAcomodacaoUrls = await uploadMultiple(_photosAcomodacao, "acomodacao");
-        List<String> photosCalcamentoUrls = await uploadMultiple(_photosCalcamento, "calcamento");
-        List<String> photosAmarracaoUrls = await uploadMultiple(_photosAmarracao, "amarracao");
+        formData['photoPlaqueta'] = await safeUpload(_photoPlaqueta, "plaquetas");
+        formData['signatureImage'] = await safeUpload(_signatureImage, "assinaturas");
+        formData['photosAcomodacao'] = await uploadMultiple(_photosAcomodacao, "acomodacao");
+        formData['photosCalcamento'] = await uploadMultiple(_photosCalcamento, "calcamento");
+        formData['photosAmarracao'] = await uploadMultiple(_photosAmarracao, "amarracao");
 
-        // **Correção:** Atualizar `formData` antes de salvar no Firestore
-        formData['photosAcomodacao'] = photosAcomodacaoUrls;
-        formData['photosCalcamento'] = photosCalcamentoUrls;
-        formData['photosAmarracao'] = photosAmarracaoUrls;
-        formData['photoPlaqueta'] = photoPlaquetaUrl;
-        formData['signatureImage'] = signatureImageUrl;
+        bool allUploadsSucceeded = formData.values.where((v) => v is List && v.isEmpty).isEmpty;
 
-        bool allUploadsSucceeded = photoPlaquetaUrl != null &&
-                                  signatureImageUrl != null &&
-                                  photosAcomodacaoUrls.length == _photosAcomodacao.length &&
-                                  photosCalcamentoUrls.length == _photosCalcamento.length &&
-                                  photosAmarracaoUrls.length == _photosAmarracao.length;
+        if (allUploadsSucceeded) {
+            
+          for (var damage in _damages) {
+            List<String> updatedPhotoUrls = [];
+            for (var photo in damage['photos']) {
+              if (!photo.startsWith('http')) { // Se for um caminho local, faz upload
+                String? url = await uploadImage(File(photo), "danos");
+                if (url != null) {
+                  updatedPhotoUrls.add(url);
+                }
+              } else {
+                updatedPhotoUrls.add(photo); // Mantém a URL existente
+              }
+            }
+            damage['photos'] = updatedPhotoUrls;
+          }
 
-        if (!hasInternet || !allUploadsSucceeded) {
+          formData['damages'] = _damages; // Atualiza os danos no formData
+          
+          await formRef.set(formData, SetOptions(merge: true));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Formulário salvo no Firestore com sucesso.')),
+          );
+        } else {
           await saveFormLocally(formData);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Formulário salvo localmente.')),
-          );
-          return;
-        
-        // Continua para salvar no Firestore apenas se todos os uploads foram bem-sucedidos   
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Erro ao enviar imagens. Verifique sua conexão.')),
+            const SnackBar(content: Text('Erro ao enviar imagens. Formulário salvo localmente.')),
           );
         }
       } else {
+        // Salva caminhos locais se estiver offline
+        formData['photoPlaqueta'] = _photoPlaqueta?.path;
+        formData['signatureImage'] = _signatureImage?.path;
+        formData['photosAcomodacao'] = _photosAcomodacao.map((p) => p.path).toList();
+        formData['photosCalcamento'] = _photosCalcamento.map((p) => p.path).toList();
+        formData['photosAmarracao'] = _photosAmarracao.map((p) => p.path).toList();
+
         await saveFormLocally(formData);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Formulário salvo localmente.')),
+          const SnackBar(content: Text('Sem internet. Formulário salvo localmente.')),
         );
       }
     } catch (e) {
@@ -395,93 +400,66 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     }
   }
 
-  Future<void> _saveDamage() async {
-    if (_damageDescription.trim().isEmpty && _damagePhotos.isEmpty) {
-      print('Nenhuma avaria foi fornecida para salvar.');
-      return;
-    }
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      List<String> savedDamages = prefs.getStringList('pending_damages') ?? [];
-
-      bool hasInternet = false;
+  void _saveDamage() async {
+    if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
       try {
-        final result = await InternetAddress.lookup('example.com');
-        if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-          hasInternet = true;
-        }
-      } on SocketException catch (_) {
-        hasInternet = false;
-      }
+        var connectivityResult = await Connectivity().checkConnectivity();
+        bool hasInternet = connectivityResult != ConnectivityResult.none;
 
-      List<String> photoUrls = [];
-
-      if (hasInternet) {
-        for (File photo in _damagePhotos) {
-          String? url = await uploadImage(photo, "danos");
-          if (url != null) {
-            photoUrls.add(url);
+        List<String> photoUrls = [];
+        if (hasInternet) {
+          // Upload das fotos para o Firebase Storage
+          for (File photo in _damagePhotos) {
+            String? url = await uploadImage(photo, "danos");
+            if (url != null) {
+              photoUrls.add(url);
+            }
           }
-        }
-      } else {
-        photoUrls = _damagePhotos.map((photo) => photo.path).toList();
-      }
-
-      Map<String, dynamic> damageData = {
-        'formId': widget.formId,
-        'description': _damageDescription.trim(),
-        'photos': photoUrls,
-        'timestamp': DateTime.now().toIso8601String(),
-      };
-
-      if (hasInternet) {
-        await FirebaseFirestore.instance
-            .collection('inspection')
-            .doc(widget.formId)
-            .collection('damages')
-            .add(damageData);
-      } else {
-        savedDamages.add(jsonEncode(damageData));
-        await prefs.setStringList('pending_damages', savedDamages);
-      }
-
-      setState(() {
-        if (_editingIndex != null) {
-          _damages[_editingIndex!] = damageData;
-          _editingIndex = null;
         } else {
-          _damages.add(damageData);
+          // Salva os caminhos locais das imagens
+          photoUrls = _damagePhotos.map((photo) => photo.path).toList();
         }
-        _damageDescription = '';
-        _damagePhotos.clear();
-      });
 
-    } catch (e) {
-      print('Erro ao salvar avaria: $e');
+        // Cria o mapa dinâmico
+        Map<String, dynamic> dynamicMap = {
+          'description': _damageDescription.trim(),
+          'photos': photoUrls, // Salva as URLs ou caminhos locais
+          'formId': widget.formId, // Associa a avaria ao formulário principal
+        };
+
+        setState(() {
+          _damages.add(dynamicMap); // Adiciona o dano à lista
+          _damageDescription = ''; // Limpa a descrição
+          _damagePhotos.clear(); // Limpa a lista de fotos
+        });
+
+        print('Avaria salva com sucesso: $dynamicMap');
+
+        // Salva a avaria localmente para sincronização posterior
+        await saveDamageLocally(dynamicMap);
+      } catch (e) {
+        print('Erro ao salvar avaria: $e');
+      }
+    } else {
+      print('Nenhuma avaria foi fornecida para salvar.');
     }
+  }
+
+  Future<void> saveDamageLocally(Map<String, dynamic> damageData) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+    pendingDamages.add(jsonEncode(damageData));
+    await prefs.setStringList('pending_damages', pendingDamages);
   }
 
   void _editDamage(int index) {
-    final damage = _damages[index];
-
-    setState(() {
-      _damageDescription = damage['description'] as String;
-
-      List<String> photos = List<String>.from(damage['photos'] ?? []);
-
-      // Verifica se as imagens são URLs ou caminhos locais
-      _damagePhotos = photos.map((path) {
-        if (path.startsWith('http')) {
-          return File(''); // Deixe como um placeholder, se necessário
-        } else {
-          return File(path);
-        }
-      }).toList();
-
-      _editingIndex = index; // Armazena o índice para atualização futura
-    });
-  }
+  final damage = _damages[index];
+  setState(() {
+    _damageDescription = damage['description'] as String; // Casting explícito para String
+    _damagePhotos = []; // Casting para List
+    _damages.removeAt(index);
+  });
+}
 
 void _showPhoto(File photo, {required VoidCallback onDelete}) {
   showDialog(
@@ -543,8 +521,11 @@ void _showPhoto(File photo, {required VoidCallback onDelete}) {
   @override
 void initState() {
   super.initState();
-  checkAndSendPendingForms(); // Verifica e envia formulários pendentes ao iniciar
-  syncPendingDamages(); // Verifica e envia danos pendentes ao iniciar
+  checkAndSendPendingForms((progress) {
+      setState(() {
+        _syncProgress = progress;
+      });
+    });; // Verifica e envia formulários pendentes ao iniciar
 
     // Carrega o formulário localmente apenas se houver dados salvos
     _loadFormLocally().then((localData) {
@@ -1047,35 +1028,21 @@ Widget build(BuildContext context) {
                     itemCount: _damages.length,
                     itemBuilder: (context, index) {
                       final damage = _damages[index];
-                      final List<String> photos = List<String>.from(damage['photos'] ?? []);
                       return Card(
                         child: ListTile(
                           title: Text(damage['description'] as String),
                           subtitle: Wrap(
                             spacing: 8,
                             runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-                              children: photos.map<Widget>((path) {
+                              children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
                                 return GestureDetector(
-                                  onTap: () => _showFullImage(path),
-                                  child: path.startsWith('http')
-                                      ? Image.network(
-                                          path,
-                                          height: 60,
-                                          width: 60,
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, stackTrace) {
-                                            return const Icon(Icons.broken_image, size: 60, color: Colors.grey);
-                                          },
-                                        )
-                                      : Image.file(
-                                          File(path),
-                                          height: 60,
-                                          width: 60,
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, stackTrace) {
-                                            return const Icon(Icons.image_not_supported, size: 60, color: Colors.grey);
-                                          },
-                                        ),
+                                  onTap: () => _showFullImage(url),
+                                  child: Image.network(
+                                    url,
+                                    height: 60,
+                                    width: 60,
+                                    fit: BoxFit.cover,
+                                  ),
                                 );
                             }).toList(),
                           ),
