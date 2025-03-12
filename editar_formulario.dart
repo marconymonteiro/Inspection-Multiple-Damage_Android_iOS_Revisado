@@ -217,7 +217,16 @@ class _EditarFormularioState extends State<EditarFormulario> {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: urls.map((url) => _buildImage(url)).toList(),
+          children: urls.map((url) {
+            // Verifica se o URL é uma String ou um objeto dinâmico
+            if (url is String) {
+              return _buildImage(url);
+            } else if (url is Map<String, dynamic> && url.containsKey('url')) {
+              return _buildImage(url['url']);
+            } else {
+              return Container(); // Ou um widget de fallback
+            }
+          }).toList(),
         ),
       ],
     );
