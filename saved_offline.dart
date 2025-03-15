@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'local_storage.dart'; // Importa seu arquivo existente
+import 'visualizar_formulario_local.dart';
 
 class SavedOfflineForms extends StatefulWidget {
   @override
@@ -100,6 +101,16 @@ class _SavedOfflineFormsState extends State<SavedOfflineForms> {
                           Text('Nota Fiscal: ${form['invoiceNumber'] ?? ''}'),
                         ],
                       ),
+
+                      onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => VisualizarFormularioLocal(formData: form),
+                              ),
+                            );
+                          },
+
                     );
                   },
                 ),
