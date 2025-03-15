@@ -205,3 +205,4 @@ Future<void> syncPendingDamages() async {
     print('Erro ao sincronizar avarias pendentes: $e');
   }
 }
+
