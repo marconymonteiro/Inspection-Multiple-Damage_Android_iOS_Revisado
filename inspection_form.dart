@@ -1,5 +1,3 @@
-// ignore_for_file: unused_local_variable
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,7 +13,6 @@ import 'package:signature/signature.dart'; // Pacote para captura de assinatura
 import 'package:cloud_firestore/cloud_firestore.dart'; // Importe o pacote do Firestore
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:crypto/crypto.dart';
-//import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'local_storage.dart'; // Importa o arquivo onde você implementou checkAndSendPendingForms()
 
@@ -403,6 +400,8 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   void _saveDamage() async {
     if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
       try {
+        
+        /*
         var connectivityResult = await Connectivity().checkConnectivity();
         bool hasInternet = connectivityResult != ConnectivityResult.none;
 
@@ -420,23 +419,31 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
           photoUrls = _damagePhotos.map((photo) => photo.path).toList();
         }
 
+        */
+
         // Cria o mapa dinâmico
         Map<String, dynamic> dynamicMap = {
           'description': _damageDescription.trim(),
-          'photos': photoUrls, // Salva as URLs ou caminhos locais
-          'formId': widget.formId, // Associa a avaria ao formulário principal
+          'photos': _damagePhotos.map<String>((photo) => photo.path.toString()).toList(),
+          'formId': widget.formId,
         };
 
+        for (var photo in _damagePhotos) {
+          print('Tipo de photo.path: ${photo.path.runtimeType}');
+        }
+
+        // Salva a avaria localmente para sincronização posterior
+        await saveDamageLocally(dynamicMap);
+
+        // Atualiza a lista _damages com os dados locais
+        List<Map<String, dynamic>> localDamages = await loadDamagesLocally(widget.formId);
         setState(() {
-          _damages.add(dynamicMap); // Adiciona o dano à lista
+          _damages = localDamages;
           _damageDescription = ''; // Limpa a descrição
           _damagePhotos.clear(); // Limpa a lista de fotos
         });
 
         print('Avaria salva com sucesso: $dynamicMap');
-
-        // Salva a avaria localmente para sincronização posterior
-        await saveDamageLocally(dynamicMap);
       } catch (e) {
         print('Erro ao salvar avaria: $e');
       }
@@ -450,6 +457,22 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
     pendingDamages.add(jsonEncode(damageData));
     await prefs.setStringList('pending_damages', pendingDamages);
+  }
+
+  Future<List<Map<String, dynamic>>> loadDamagesLocally(String formId) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+
+    return pendingDamages.map((damageJson) {
+      Map<String, dynamic> damage = jsonDecode(damageJson) as Map<String, dynamic>;
+
+      // Garante que 'photos' seja do tipo List<String>
+      if (damage.containsKey('photos') && damage['photos'] is List<dynamic>) {
+        damage['photos'] = (damage['photos'] as List).map((photo) => photo.toString()).toList();
+      }
+
+      return damage;
+    }).where((damage) => damage['formId'] == formId).toList(); // Filtra pelo formId
   }
 
   void _editDamage(int index) {
@@ -1022,72 +1045,81 @@ Widget build(BuildContext context) {
                 ),
                 const SizedBox(height: 16),
                 if (_damages.isNotEmpty)
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _damages.length,
-                    itemBuilder: (context, index) {
-                      final damage = _damages[index];
-                      return Card(
-                        child: ListTile(
-                          title: Text(damage['description'] as String),
-                          subtitle: Wrap(
-                            spacing: 8,
-                            runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-                              children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
-                                return GestureDetector(
-                                  onTap: () => _showFullImage(url),
-                                  child: Image.network(
-                                    url,
-                                    height: 60,
-                                    width: 60,
-                                    fit: BoxFit.cover,
-                                  ),
-                                );
-                            }).toList(),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit, color: Colors.blue),
-                                onPressed: () => _editDamage(index),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
-                                onPressed: () async {
-                                  final shouldDelete = await showDialog<bool>(
-                                    context: context,
-                                    builder: (context) {
-                                      return AlertDialog(
-                                        title: const Text('Excluir Avaria'),
-                                        content: const Text('Tem certeza que deseja excluir esta avaria?'),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(false),
-                                            child: const Text('Não'),
-                                          ),
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(true),
-                                            child: const Text('Sim'),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                  if (shouldDelete ?? false) {
-                                    setState(() {
-                                      _damages.removeAt(index);
-                                    });
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
+
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _damages.length,
+                  itemBuilder: (context, index) {
+                    final damage = _damages[index];
+                    return Card(
+                      child: ListTile(
+                        title: Text(damage['description'] as String),
+                        subtitle: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
+                            return GestureDetector(
+                              onTap: () => _showFullImage(url),
+                              child: url.startsWith('http') ? // Verifica se é uma URL remota
+                                Image.network(
+                                  url,
+                                  height: 60,
+                                  width: 60,
+                                  fit: BoxFit.cover,
+                                ) :
+                                Image.file( // Se não for URL, assume que é caminho local
+                                  File(url),
+                                  height: 60,
+                                  width: 60,
+                                  fit: BoxFit.cover,
+                                ),
+                            );
+                          }).toList(),
                         ),
-                      );
-                    },
-                  ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.blue),
+                              onPressed: () => _editDamage(index),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () async {
+                                final shouldDelete = await showDialog<bool>(
+                                  context: context,
+                                  builder: (context) {
+                                    return AlertDialog(
+                                      title: const Text('Excluir Avaria'),
+                                      content: const Text('Tem certeza que deseja excluir esta avaria?'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(context).pop(false),
+                                          child: const Text('Não'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.of(context).pop(true),
+                                          child: const Text('Sim'),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+                                if (shouldDelete ?? false) {
+                                  setState(() {
+                                    _damages.removeAt(index);
+                                  });
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
               ],
               // Campo Assinatura
               const SizedBox(height: 16),
