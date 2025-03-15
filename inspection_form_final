@@ -1,5 +1,3 @@
-// ignore_for_file: unused_local_variable
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,7 +13,6 @@ import 'package:signature/signature.dart'; // Pacote para captura de assinatura
 import 'package:cloud_firestore/cloud_firestore.dart'; // Importe o pacote do Firestore
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:crypto/crypto.dart';
-//import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'local_storage.dart'; // Importa o arquivo onde você implementou checkAndSendPendingForms()
 
@@ -312,6 +309,24 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
         bool allUploadsSucceeded = formData.values.where((v) => v is List && v.isEmpty).isEmpty;
 
         if (allUploadsSucceeded) {
+            
+          for (var damage in _damages) {
+            List<String> updatedPhotoUrls = [];
+            for (var photo in damage['photos']) {
+              if (!photo.startsWith('http')) { // Se for um caminho local, faz upload
+                String? url = await uploadImage(File(photo), "danos");
+                if (url != null) {
+                  updatedPhotoUrls.add(url);
+                }
+              } else {
+                updatedPhotoUrls.add(photo); // Mantém a URL existente
+              }
+            }
+            damage['photos'] = updatedPhotoUrls;
+          }
+
+          formData['damages'] = _damages; // Atualiza os danos no formData
+          
           await formRef.set(formData, SetOptions(merge: true));
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Formulário salvo no Firestore com sucesso.')),
@@ -385,32 +400,24 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   void _saveDamage() async {
     if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
       try {
-        // Verifica a conectividade
-        var connectivityResult = await Connectivity().checkConnectivity();
-        bool hasInternet = connectivityResult != ConnectivityResult.none;
-
-        List<String> photoUrls = [];
-        if (hasInternet) {
-          // Upload das fotos para o Firebase Storage
-          for (File photo in _damagePhotos) {
-            String? url = await uploadImage(photo, "danos");
-            if (url != null) {
-              photoUrls.add(url);
-            }
-          }
-        } else {
-          // Salva os caminhos locais das imagens
-          photoUrls = _damagePhotos.map((photo) => photo.path).toList();
-        }
-
         // Cria o mapa dinâmico
         Map<String, dynamic> dynamicMap = {
           'description': _damageDescription.trim(),
-          'photos': photoUrls, // Salva as URLs ou caminhos locais
+          'photos': _damagePhotos.map<String>((photo) => photo.path.toString()).toList(),
+          'formId': widget.formId,
         };
 
+        for (var photo in _damagePhotos) {
+          print('Tipo de photo.path: ${photo.path.runtimeType}');
+        }
+
+        // Salva a avaria localmente para sincronização posterior
+        await saveDamageLocally(dynamicMap);
+
+        // Atualiza a lista _damages com os dados locais
+        List<Map<String, dynamic>> localDamages = await loadDamagesLocally(widget.formId);
         setState(() {
-          _damages.add(dynamicMap); // Adiciona o dano à lista
+          _damages = localDamages;
           _damageDescription = ''; // Limpa a descrição
           _damagePhotos.clear(); // Limpa a lista de fotos
         });
@@ -421,17 +428,76 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       }
     } else {
       print('Nenhuma avaria foi fornecida para salvar.');
+      ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Nenhuma avaria foi fornecida para salvar.')),
+    );
     }
   }
 
-  void _editDamage(int index) {
-  final damage = _damages[index];
-  setState(() {
-    _damageDescription = damage['description'] as String; // Casting explícito para String
-    _damagePhotos = []; // Casting para List
+  Future<void> saveDamageLocally(Map<String, dynamic> damageData) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+    
+    // Verifica se o dano já existe (baseado no formId e description)
+    bool exists = false;
+    for (int i = 0; i < pendingDamages.length; i++) {
+      Map<String, dynamic> existingDamage = jsonDecode(pendingDamages[i]);
+      if (existingDamage['formId'] == damageData['formId'] &&
+          existingDamage['description'] == damageData['description']) {
+        pendingDamages[i] = jsonEncode(damageData); // Atualiza o dano existente
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      pendingDamages.add(jsonEncode(damageData)); // Adiciona o novo dano
+    }
+    await prefs.setStringList('pending_damages', pendingDamages);
+  }
+
+  Future<List<Map<String, dynamic>>> loadDamagesLocally(String formId) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+
+    return pendingDamages.map((damageJson) {
+      Map<String, dynamic> damage = jsonDecode(damageJson) as Map<String, dynamic>;
+
+      // Garante que 'photos' seja do tipo List<String>
+      if (damage.containsKey('photos') && damage['photos'] is List<dynamic>) {
+        damage['photos'] = (damage['photos'] as List).map((photo) => photo.toString()).toList();
+      }
+
+      return damage;
+    }).where((damage) => damage['formId'] == formId).toList(); // Filtra pelo formId
+  }
+
+  void _editDamage(int index) async {
+    final damage = _damages[index];
+
+    setState(() {
+      _damageDescription = damage['description'] as String;
+      _damagePhotos = (damage['photos'] as List<dynamic>)
+          .map((photo) => File(photo.toString()))
+          .toList();
+    });
+
+    // Remover a avaria da lista local e do armazenamento
     _damages.removeAt(index);
-  });
-}
+    await _removeDamageLocally(damage);
+  }
+
+  Future<void> _removeDamageLocally(Map<String, dynamic> damage) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+
+    pendingDamages.removeWhere((item) {
+      Map<String, dynamic> existingDamage = jsonDecode(item);
+      return existingDamage['formId'] == damage['formId'] &&
+            existingDamage['description'] == damage['description'];
+    });
+
+    await prefs.setStringList('pending_damages', pendingDamages);
+  }
 
 void _showPhoto(File photo, {required VoidCallback onDelete}) {
   showDialog(
@@ -717,41 +783,39 @@ Future<void> _pickPlaquetaPhoto() async {
 
   // Método para exibir a imagem em tamanho completo (reutilizado para todos os campos)
   void _showFullImage(dynamic image) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InteractiveViewer(
+              panEnabled: true, // Permite arrastar a imagem
+              boundaryMargin: const EdgeInsets.all(20), // Margem para movimento
+              minScale: 1.0, // Zoom mínimo
+              maxScale: 20.0, // Zoom máximo
+              child: _getImageWidget(image), // Usa um método separado para exibir a imagem
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Fechar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Método auxiliar para carregar a imagem corretamente
+  Widget _getImageWidget(dynamic image) {
     if (image is File) {
-      // Exibe uma imagem local (File)
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Image.file(image),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Fechar'),
-              ),
-            ],
-          ),
-        ),
-      );
+      return Image.file(image); // Caso já seja um File, exibe normalmente
+    } else if (image is String && image.startsWith('http')) {
+      return Image.network(image); // Caso seja uma URL remota
     } else if (image is String) {
-      // Exibe uma imagem remota (URL)
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Image.network(image),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Fechar'),
-              ),
-            ],
-          ),
-        ),
-      );
+      return Image.file(File(image)); // Caso seja um caminho local, converte para File
     }
+    return const SizedBox(); // Retorna um widget vazio se a imagem for inválida
   }
 
   Future<void> _submitForm() async {
@@ -994,72 +1058,83 @@ Widget build(BuildContext context) {
                 ),
                 const SizedBox(height: 16),
                 if (_damages.isNotEmpty)
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _damages.length,
-                    itemBuilder: (context, index) {
-                      final damage = _damages[index];
-                      return Card(
-                        child: ListTile(
-                          title: Text(damage['description'] as String),
-                          subtitle: Wrap(
-                            spacing: 8,
-                            runSpacing: 8, // Adiciona espaçamento vertical entre as linhas
-                              children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
-                                return GestureDetector(
-                                  onTap: () => _showFullImage(url),
-                                  child: Image.network(
-                                    url,
-                                    height: 60,
-                                    width: 60,
-                                    fit: BoxFit.cover,
-                                  ),
-                                );
-                            }).toList(),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit, color: Colors.blue),
-                                onPressed: () => _editDamage(index),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
-                                onPressed: () async {
-                                  final shouldDelete = await showDialog<bool>(
-                                    context: context,
-                                    builder: (context) {
-                                      return AlertDialog(
-                                        title: const Text('Excluir Avaria'),
-                                        content: const Text('Tem certeza que deseja excluir esta avaria?'),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(false),
-                                            child: const Text('Não'),
-                                          ),
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(true),
-                                            child: const Text('Sim'),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                  if (shouldDelete ?? false) {
-                                    setState(() {
-                                      _damages.removeAt(index);
-                                    });
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
+
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _damages.length,
+                  itemBuilder: (context, index) {
+                    final damage = _damages[index];
+                    return Card(
+                      child: ListTile(
+                        title: Text(damage['description'] as String),
+                        subtitle: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: (damage['photos'] != null ? damage['photos'] as List<String> : []).map<Widget>((url) {
+                            return GestureDetector(
+                              onTap: () => _showFullImage(url),
+                              child: url.startsWith('http') ? // Verifica se é uma URL remota
+                                Image.network(
+                                  url,
+                                  height: 60,
+                                  width: 60,
+                                  fit: BoxFit.cover,
+                                ) :
+                                Image.file( // Se não for URL, assume que é caminho local
+                                  File(url),
+                                  height: 60,
+                                  width: 60,
+                                  fit: BoxFit.cover,
+                                ),
+                            );
+                          }).toList(),
                         ),
-                      );
-                    },
-                  ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.blue),
+                              onPressed: () => _editDamage(index),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () async {
+                                final shouldDelete = await showDialog<bool>(
+                                  context: context,
+                                  builder: (context) {
+                                    return AlertDialog(
+                                      title: const Text('Excluir Avaria'),
+                                      content: const Text('Tem certeza que deseja excluir esta avaria?'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(context).pop(false),
+                                          child: const Text('Não'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.of(context).pop(true),
+                                          child: const Text('Sim'),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+                                if (shouldDelete ?? false) {
+                                  await _removeDamageLocally(_damages[index]); // Remove do SharedPreferences
+                                  setState(() {
+                                    _damages.removeAt(index); // Atualiza a lista na tela
+                                  });
+                                }
+                              },
+                            ),
+
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
               ],
               // Campo Assinatura
               const SizedBox(height: 16),
