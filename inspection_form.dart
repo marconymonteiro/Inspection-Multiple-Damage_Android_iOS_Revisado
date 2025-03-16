@@ -400,27 +400,6 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
   void _saveDamage() async {
     if (_damageDescription.trim().isNotEmpty || _damagePhotos.isNotEmpty) {
       try {
-        
-        /*
-        var connectivityResult = await Connectivity().checkConnectivity();
-        bool hasInternet = connectivityResult != ConnectivityResult.none;
-
-        List<String> photoUrls = [];
-        if (hasInternet) {
-          // Upload das fotos para o Firebase Storage
-          for (File photo in _damagePhotos) {
-            String? url = await uploadImage(photo, "danos");
-            if (url != null) {
-              photoUrls.add(url);
-            }
-          }
-        } else {
-          // Salva os caminhos locais das imagens
-          photoUrls = _damagePhotos.map((photo) => photo.path).toList();
-        }
-
-        */
-
         // Cria o mapa dinâmico
         Map<String, dynamic> dynamicMap = {
           'description': _damageDescription.trim(),
@@ -449,13 +428,30 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
       }
     } else {
       print('Nenhuma avaria foi fornecida para salvar.');
+      ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Nenhuma avaria foi fornecida para salvar.')),
+    );
     }
   }
 
   Future<void> saveDamageLocally(Map<String, dynamic> damageData) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
-    pendingDamages.add(jsonEncode(damageData));
+    
+    // Verifica se o dano já existe (baseado no formId e description)
+    bool exists = false;
+    for (int i = 0; i < pendingDamages.length; i++) {
+      Map<String, dynamic> existingDamage = jsonDecode(pendingDamages[i]);
+      if (existingDamage['formId'] == damageData['formId'] &&
+          existingDamage['description'] == damageData['description']) {
+        pendingDamages[i] = jsonEncode(damageData); // Atualiza o dano existente
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      pendingDamages.add(jsonEncode(damageData)); // Adiciona o novo dano
+    }
     await prefs.setStringList('pending_damages', pendingDamages);
   }
 
@@ -475,14 +471,33 @@ class _FormularioInspecaoState extends State<FormularioInspecao> {
     }).where((damage) => damage['formId'] == formId).toList(); // Filtra pelo formId
   }
 
-  void _editDamage(int index) {
-  final damage = _damages[index];
-  setState(() {
-    _damageDescription = damage['description'] as String; // Casting explícito para String
-    _damagePhotos = []; // Casting para List
+  void _editDamage(int index) async {
+    final damage = _damages[index];
+
+    setState(() {
+      _damageDescription = damage['description'] as String;
+      _damagePhotos = (damage['photos'] as List<dynamic>)
+          .map((photo) => File(photo.toString()))
+          .toList();
+    });
+
+    // Remover a avaria da lista local e do armazenamento
     _damages.removeAt(index);
-  });
-}
+    await _removeDamageLocally(damage);
+  }
+
+  Future<void> _removeDamageLocally(Map<String, dynamic> damage) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> pendingDamages = prefs.getStringList('pending_damages') ?? [];
+
+    pendingDamages.removeWhere((item) {
+      Map<String, dynamic> existingDamage = jsonDecode(item);
+      return existingDamage['formId'] == damage['formId'] &&
+            existingDamage['description'] == damage['description'];
+    });
+
+    await prefs.setStringList('pending_damages', pendingDamages);
+  }
 
 void _showPhoto(File photo, {required VoidCallback onDelete}) {
   showDialog(
@@ -768,41 +783,39 @@ Future<void> _pickPlaquetaPhoto() async {
 
   // Método para exibir a imagem em tamanho completo (reutilizado para todos os campos)
   void _showFullImage(dynamic image) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InteractiveViewer(
+              panEnabled: true, // Permite arrastar a imagem
+              boundaryMargin: const EdgeInsets.all(20), // Margem para movimento
+              minScale: 1.0, // Zoom mínimo
+              maxScale: 20.0, // Zoom máximo
+              child: _getImageWidget(image), // Usa um método separado para exibir a imagem
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Fechar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Método auxiliar para carregar a imagem corretamente
+  Widget _getImageWidget(dynamic image) {
     if (image is File) {
-      // Exibe uma imagem local (File)
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Image.file(image),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Fechar'),
-              ),
-            ],
-          ),
-        ),
-      );
+      return Image.file(image); // Caso já seja um File, exibe normalmente
+    } else if (image is String && image.startsWith('http')) {
+      return Image.network(image); // Caso seja uma URL remota
     } else if (image is String) {
-      // Exibe uma imagem remota (URL)
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Image.network(image),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Fechar'),
-              ),
-            ],
-          ),
-        ),
-      );
+      return Image.file(File(image)); // Caso seja um caminho local, converte para File
     }
+    return const SizedBox(); // Retorna um widget vazio se a imagem for inválida
   }
 
   Future<void> _submitForm() async {
@@ -1107,12 +1120,14 @@ Widget build(BuildContext context) {
                                   },
                                 );
                                 if (shouldDelete ?? false) {
+                                  await _removeDamageLocally(_damages[index]); // Remove do SharedPreferences
                                   setState(() {
-                                    _damages.removeAt(index);
+                                    _damages.removeAt(index); // Atualiza a lista na tela
                                   });
                                 }
                               },
                             ),
+
                           ],
                         ),
                       ),
